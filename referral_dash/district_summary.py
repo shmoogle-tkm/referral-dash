@@ -5,6 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 from .settings import app_directory
+from .template import save_picture
 
 METRICS = [("CONTACT ATTEMPTS", "percent_contacted", "%", False),
            ("SUCCESSFUL CONTACTS", "percent_successful_contact", "%", False),
@@ -186,4 +187,4 @@ def render_summary(zone, district, records, previous, period, output):
                       fill=TEXT, anchor="mm")
             _draw_trend(draw, center, top + 103, percent_change(value, earlier), lower_is_better, previous is not None)
 
-    image.save(output)
+    save_picture(image, output)

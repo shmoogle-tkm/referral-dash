@@ -57,7 +57,8 @@ class ReportTests(Isolated):
             self.assertEqual((facts["attempted_percent"], facts["successful_contact_percent"], facts["found_percent"],
                               facts["at_church_percent"], facts["median_response_minutes"]), (75, 50, 25, 50, 25))
             self.assertNotIn("output_folder", facts["settings"])
-            for image in output.rglob("*.png"):
+            self.assertEqual(len(list(output.rglob("*.jpg"))), 11)
+            for image in output.rglob("*.jpg"):
                 with Image.open(image) as value:
                     value.verify()
             again, _ = engine.generate_reports(SAMPLE, folder, SETTINGS)
@@ -262,6 +263,45 @@ class TableauTests(unittest.TestCase):
             path.write_text("Full Name\nA\n", encoding="utf-16")
             with self.assertRaisesRegex(ValueError, "Event Date Selected"):
                 validate_date_range(path, datetime(2026, 10, 2).date())
+
+
+class DriveTests(Isolated):
+    def test_upload_recreates_the_run_folder_in_parallel(self):
+        import threading
+        from referral_dash import drive
+        created, threads = [], set()
+
+        class Request:
+            def __init__(self, body):
+                self.body = body
+
+            def execute(self, num_retries):
+                threads.add(threading.get_ident())
+                created.append(self.body)
+                return {"id": f"id-{len(created)}"}
+
+        class Service:
+            def files(self):
+                return self
+
+            def create(self, body, fields, supportsAllDrives, media_body=None):
+                return Request(body)
+
+        with tempfile.TemporaryDirectory() as folder:
+            run = Path(folder) / "Dashboard_X"
+            for sub in ("1. Areas", "5. District Summaries"):
+                (run / sub).mkdir(parents=True)
+                for i in range(6):
+                    (run / sub / f"{i}.jpg").write_bytes(b"x")
+            (run / "run-summary.json").write_text("{}")
+            calls = []
+            with patch.object(drive, "_credentials", return_value=object()),                     patch.object(drive, "_service", side_effect=lambda creds=None: Service()),                     patch("referral_dash.drive.copy", side_effect=lambda c: c),                     patch("googleapiclient.http.MediaFileUpload"):
+                link = drive.upload_run(run, "parent", lambda m, done=None, total=None: calls.append((done, total)))
+        folders = [b for b in created if b.get("mimeType") == drive.FOLDER_TYPE]
+        self.assertEqual([f["name"] for f in folders], ["Dashboard_X", "1. Areas", "5. District Summaries"])
+        self.assertEqual(len(created) - len(folders), 13)
+        self.assertEqual(calls[-1], (13, 13))
+        self.assertTrue(link.endswith("/id-1"))
 
 
 class AppTests(Isolated):

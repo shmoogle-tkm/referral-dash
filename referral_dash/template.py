@@ -5,6 +5,17 @@ import os
 import sys
 import random
 
+PICTURE_SUFFIX = ".jpg"
+
+
+def save_picture(img, output_path):
+    """JPEG keeps a run about 8x smaller than PNG, which matters for Drive uploads."""
+    if str(output_path).lower().endswith((".jpg", ".jpeg")):
+        img.convert("RGB").save(output_path, "JPEG", quality=88, optimize=True)
+    else:
+        img.save(output_path)
+
+
 class DashboardTemplate():
 
     def __init__(self, lightning_time=5, hot_found=20):
@@ -349,5 +360,4 @@ class DashboardTemplate():
         # ======================
         # SAVE
         # ======================
-        #output_path = output_path.replace("/", "-")
-        img.save(output_path)
+        save_picture(img, output_path)

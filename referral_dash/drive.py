@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import mimetypes
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from copy import copy
 from pathlib import Path
 
 from .settings import app_directory, data_directory, install_directory
@@ -10,6 +13,10 @@ SCOPES = ["https://www.googleapis.com/auth/drive"]
 CLIENT_FILE = "google_oauth_client.json"
 FOLDER_TYPE = "application/vnd.google-apps.folder"
 RETRIES = 5
+# A stalled connection gives up and retries instead of freezing the run.
+TIMEOUT_SECONDS = 120
+# Like the Data Hub's publisher: several uploads at once hide per-request delays.
+UPLOAD_WORKERS = 4
 
 
 def _client_file():
@@ -39,12 +46,15 @@ def _credentials():
     return creds if creds.valid else None
 
 
-def _service():
+def _service(creds=None):
+    import httplib2
+    from google_auth_httplib2 import AuthorizedHttp
     from googleapiclient.discovery import build
-    creds = _credentials()
+    creds = creds or _credentials()
     if creds is None:
         raise RuntimeError("Google Drive is not connected. Open Settings and click Connect Google Drive.")
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
+    http = AuthorizedHttp(creds, http=httplib2.Http(timeout=TIMEOUT_SECONDS))
+    return build("drive", "v3", http=http, cache_discovery=False)
 
 
 def connected_account():
@@ -90,25 +100,41 @@ def folder_link(folder_id):
     return f"https://drive.google.com/drive/folders/{folder_id}"
 
 
-def upload_run(run_folder, parent_id, progress=lambda message: None):
+def upload_run(run_folder, parent_id, progress=lambda message, done=None, total=None: None):
     """Copy a finished run folder, with its subfolders, into the Drive folder. Returns the new folder's link."""
     from googleapiclient.http import MediaFileUpload
-    service = _service()
+    creds = _credentials()
+    service = _service(creds)
     run_folder = Path(run_folder)
 
     def make_folder(name, parent):
         return service.files().create(body={"name": name, "mimeType": FOLDER_TYPE, "parents": [parent]},
                                       fields="id", supportsAllDrives=True).execute(num_retries=RETRIES)["id"]
 
-    files = sorted(p for p in run_folder.rglob("*") if p.is_file())
+    progress("Creating the Drive folder...")
     folders = {run_folder: make_folder(run_folder.name, parent_id)}
-    for index, path in enumerate(files, 1):
-        progress(f"Uploading to Google Drive ({index} of {len(files)})...")
-        parent = path.parent
-        for folder in reversed([parent, *parent.parents]):
-            if folder not in folders and run_folder in folder.parents:
-                folders[folder] = make_folder(folder.name, folders[folder.parent])
+    for folder in sorted(p for p in run_folder.rglob("*") if p.is_dir()):
+        folders[folder] = make_folder(folder.name, folders[folder.parent])
+    files = sorted(p for p in run_folder.rglob("*") if p.is_file())
+
+    # httplib2 connections are not thread-safe, so each worker keeps its own client.
+    local = threading.local()
+
+    def upload(path):
+        if not hasattr(local, "service"):
+            local.service = _service(copy(creds))
         media = MediaFileUpload(str(path), mimetype=mimetypes.guess_type(path.name)[0] or "application/octet-stream")
-        service.files().create(body={"name": path.name, "parents": [folders[parent]]}, media_body=media,
-                               fields="id", supportsAllDrives=True).execute(num_retries=RETRIES)
+        local.service.files().create(body={"name": path.name, "parents": [folders[path.parent]]}, media_body=media,
+                                     fields="id", supportsAllDrives=True).execute(num_retries=RETRIES)
+
+    with ThreadPoolExecutor(max_workers=UPLOAD_WORKERS) as pool:
+        pending = [pool.submit(upload, path) for path in files]
+        try:
+            for done, future in enumerate(as_completed(pending), 1):
+                future.result()
+                progress(f"Uploading to Google Drive ({done} of {len(files)})...", done, len(files))
+        except BaseException:
+            for future in pending:
+                future.cancel()
+            raise
     return folder_link(folders[run_folder])

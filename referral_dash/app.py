@@ -233,7 +233,8 @@ class Controller:
                 current = "upload"
                 self._step("upload", "active")
                 self._progress("Uploading to Google Drive...", 82)
-                link = drive.upload_run(folder, settings["drive_folder"], lambda m: self._progress(m))
+                link = drive.upload_run(folder, settings["drive_folder"], lambda m, done=None, total=None:
+                                        self._progress(m, 82 + 17 * done / total if total else None))
                 facts["drive_link"] = link
                 (folder / "run-summary.json").write_text(json.dumps(facts, indent=2), encoding="utf-8")
                 self._step("upload", "done", settings["drive_folder_name"] or "Google Drive")

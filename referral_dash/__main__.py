@@ -17,6 +17,7 @@ def check_imports():
     from selenium.webdriver.chrome.webdriver import WebDriver as Chrome  # noqa: F401
     from selenium.webdriver.edge.webdriver import WebDriver as Edge  # noqa: F401
     from googleapiclient.discovery import build  # noqa: F401
+    import google_auth_httplib2, httplib2  # noqa: F401
     from google_auth_oauthlib.flow import InstalledAppFlow  # noqa: F401
     import keyring.backends.Windows  # noqa: F401
     import referral_dash.tableau.download  # noqa: F401

@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from .group import Mission, ReferralPerson, DATE_FORMAT
-from .template import DashboardTemplate
+from .template import PICTURE_SUFFIX, DashboardTemplate
 from .settings import METRIC_KEYS, VERSION, validate_settings
 from .district_summary import area_records, period_label, render_summary
 
@@ -126,10 +126,10 @@ def generate_reports(filename, output_parent, settings, progress=lambda message,
         directory = staging / folder
         directory.mkdir(parents=True, exist_ok=True)
         name = safe_name(stem)
-        candidate = directory / (name + ".png")
+        candidate = directory / (name + PICTURE_SUFFIX)
         sequence = 2
         while str(candidate).casefold() in used:
-            candidate = directory / (name + f" ({sequence}).png")
+            candidate = directory / (name + f" ({sequence}){PICTURE_SUFFIX}")
             sequence += 1
         used.add(str(candidate).casefold())
         progress(f"Creating {title}...", image_count, total)
@@ -153,7 +153,7 @@ def generate_reports(filename, output_parent, settings, progress=lambda message,
         for index,(zone,district) in enumerate(districts,1):
             progress(f"Creating district summary: {district}...", image_count, total)
             render_summary(zone, district, records, previous, period,
-                           summary_folder / f"{index:02d} - {safe_name(zone + ' - ' + district)}.png")
+                           summary_folder / f"{index:02d} - {safe_name(zone + ' - ' + district)}{PICTURE_SUFFIX}")
             image_count += 1
         facts.update({"version": VERSION, "generated_utc": datetime.now(timezone.utc).isoformat(),
                       "input_name": Path(filename).name, "images": image_count,
