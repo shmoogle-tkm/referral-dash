@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#0b1220">
+    <link rel="icon" href="./app-icon.png">
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./app.js" defer></script>
+    <title>Referral Dash</title>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <img src="./app-icon.png" alt="" class="brand-mark">
+          <div>
+            <div class="brand-name">Referral Dash</div>
+            <div class="brand-product" id="brand-mission">Mission reports</div>
+          </div>
+        </div>
+
+        <nav class="navigation" aria-label="Referral Dash sections">
+          <button class="nav-item is-active" data-view="run">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h6V4H4v9Zm0 7h6v-4H4v4Zm10 0h6v-9h-6v9Zm0-16v4h6V4h-6Z"/></svg>
+            Run reports
+          </button>
+          <button class="nav-item" data-view="reports">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h5v18H3V3Zm7 0h5v12h-5V3Zm7 0h5v16h-5V3Z"/></svg>
+            Past reports
+          </button>
+          <button class="nav-item" data-view="settings">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94a7.1 7.1 0 0 0 .05-.94 7.1 7.1 0 0 0-.05-.94l2.03-1.58-1.92-3.32-2.39.96a7.4 7.4 0 0 0-1.62-.94L14.88 3h-3.76l-.36 3.18c-.58.24-1.12.55-1.62.94l-2.39-.96-1.92 3.32 2.03 1.58a7.1 7.1 0 0 0-.05.94c0 .32.02.63.05.94l-2.03 1.58 1.92 3.32 2.39-.96c.5.39 1.04.7 1.62.94l.36 3.18h3.76l.36-3.18c.58-.24 1.12-.55 1.62-.94l2.39.96 1.92-3.32-2.03-1.58ZM13 15.5A3.5 3.5 0 1 1 13 8a3.5 3.5 0 0 1 0 7.5Z"/></svg>
+            Settings
+          </button>
+        </nav>
+
+        <div class="sidebar-foot">
+          <div class="privacy-dot"></div>
+          <div>
+            <strong>Runs on this computer</strong>
+            <span>Your Church login stays in Windows Credential Manager.</span>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <h1 id="page-title">Run reports</h1>
+          <div class="system-pill" id="system-pill"><span class="system-dot"></span><span id="system-text">Connecting…</span></div>
+        </header>
+
+        <section id="run-view" class="view is-active">
+          <section class="panel setup-checklist" id="setup-checklist" hidden>
+            <div class="panel-heading">
+              <div><h2>Finish setup</h2><p class="card-copy">Three things, once. After that it is one click.</p></div>
+              <button class="button button-primary" data-open-view="settings">Open settings</button>
+            </div>
+            <ol class="checklist">
+              <li id="check-mission"><span></span><div><strong>Mission</strong><small>Name exactly as Tableau lists it, plus time zone</small></div></li>
+              <li id="check-account"><span></span><div><strong>Church account</strong><small>Used to sign in to Tableau for you</small></div></li>
+              <li id="check-drive"><span></span><div><strong>Google Drive folder</strong><small>Optional · reports upload there after each run</small></div></li>
+            </ol>
+          </section>
+
+          <section id="active-work" class="active-work is-hidden" aria-live="polite">
+            <div class="work-head">
+              <div class="work-spinner"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10h-3a7 7 0 1 1-7-7V2Z"/></svg></div>
+              <div class="work-copy"><strong id="work-title">Making reports</strong><span id="work-message">Starting…</span></div>
+              <div class="work-time" id="work-time">0:00</div>
+              <div class="work-percent" id="work-percent">0%</div>
+            </div>
+            <div class="work-progress-track"><span id="work-bar"></span></div>
+            <div class="work-events" id="work-steps"></div>
+          </section>
+
+          <section id="run-result" class="panel run-result" hidden></section>
+
+          <section class="run-grid">
+            <article class="panel run-card">
+              <div class="job-top">
+                <div class="job-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/></svg></div>
+                <span class="status-badge" id="run-badge">Checking</span>
+              </div>
+              <h3>Make this week's reports</h3>
+              <p class="job-description" id="run-description">Signs in to Tableau, downloads your mission's referrals, builds every dashboard and district summary, compares them with last week, and uploads them.</p>
+              <div class="run-flow" aria-hidden="true">
+                <span>Tableau</span><i></i><span>Dashboards</span><i></i><span>Summaries</span><i></i><span id="flow-drive">Drive</span>
+              </div>
+              <button class="button button-primary button-large" id="run-button" data-run="tableau">Run now</button>
+              <div class="run-alternatives">
+                <button class="text-button" data-run="file">Use a CSV I downloaded</button>
+                <span>·</span>
+                <button class="text-button" data-run="sample">Try with sample data</button>
+              </div>
+            </article>
+
+            <aside class="destination-stack">
+              <article class="panel destination">
+                <div class="destination-icon folder"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h7l2 2h9v12H3V5Z"/></svg></div>
+                <div class="destination-copy"><small>Saved on this computer</small><strong id="output-name">—</strong><span id="output-path"></span></div>
+                <button class="button button-secondary" id="output-change">Change</button>
+              </article>
+              <article class="panel destination">
+                <div class="destination-icon drive"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.1 3h7.8l6.1 10.6-3.9 6.8H5.9L2 13.6 8.1 3Zm1.2 2-4.9 8.6 1.9 3.3 4.9-8.6L9.3 5Zm3.9 4.3L8.3 18h9.4l2-3.4-4.9-.1-1.6-5.2Z"/></svg></div>
+                <div class="destination-copy"><small>Uploaded to Google Drive</small><strong id="drive-name">Not set up</strong><span id="drive-detail">Optional</span></div>
+                <button class="button button-secondary" id="drive-setup" data-open-view="settings" data-focus="drive-folder">Set up</button>
+              </article>
+              <article class="panel destination">
+                <div class="destination-icon compare"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h2v13.2l2.6-2.6L13 16l-5 5-5-5 1.4-1.4L7 17.2V4Zm8 16h2V6.8l2.6 2.6L21 8l-5-5-5 5 1.4 1.4L15 6.8V20Z"/></svg></div>
+                <div class="destination-copy"><small>District summary comparison</small><strong id="compare-name">Automatic</strong><span id="compare-detail">Uses last week's run when there is one</span></div>
+              </article>
+            </aside>
+          </section>
+        </section>
+
+        <section id="reports-view" class="view">
+          <article class="panel">
+            <div class="panel-heading">
+              <h2>Past reports</h2>
+              <button class="button button-secondary" id="open-output">Open reports folder</button>
+            </div>
+            <div class="report-list" id="report-list"></div>
+          </article>
+        </section>
+
+        <section id="settings-view" class="view">
+          <div class="setup-grid">
+            <form class="panel settings-card" id="mission-form">
+              <div class="settings-icon blue"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a7 7 0 0 1 7 7c0 5.2-7 13-7 13S5 14.2 5 9a7 7 0 0 1 7-7Zm0 4.5A2.5 2.5 0 1 0 12 11.5 2.5 2.5 0 0 0 12 6.5Z"/></svg></div>
+              <h2>Mission</h2>
+              <p class="card-copy">Use the mission name exactly as it appears in Tableau's Mission filter.</p>
+              <label>Mission name<input name="mission" required maxlength="55" placeholder="Tennessee Knoxville Mission"></label>
+              <div class="field-pair">
+                <label>Time zone<select name="timezone" id="timezone-select"></select></label>
+                <label>Days of referrals<input name="lookback_days" type="number" min="1" max="365"></label>
+              </div>
+              <details class="more-settings">
+                <summary>Response time and icons</summary>
+                <div class="field-pair">
+                  <label>Morning begins<input name="start_time" type="time"></label>
+                  <label>Night begins<input name="cutoff_time" type="time"></label>
+                </div>
+                <div class="field-pair">
+                  <label>Lightning under (minutes)<input name="lightning" type="number" min="0" max="1440"></label>
+                  <label>Pepper at (% found)<input name="pepper" type="number" min="0" max="100"></label>
+                </div>
+                <label>Zones in another time zone<textarea name="overrides" rows="3" placeholder="Hawaii = HST"></textarea></label>
+              </details>
+              <button class="button button-primary" type="submit">Save mission</button>
+            </form>
+
+            <form class="panel settings-card" id="account-form">
+              <div class="settings-icon amber"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a5 5 0 0 1 5 5v3h1a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h1V7a5 5 0 0 1 5-5Zm0 2a3 3 0 0 0-3 3v3h6V7a3 3 0 0 0-3-3Z"/></svg></div>
+              <h2>Church account</h2>
+              <p class="card-copy" id="account-overview">Referral Dash signs in to Tableau with this account.</p>
+              <label>Missionary email<input name="email" type="email" autocomplete="email" required></label>
+              <label>Church username<input name="username" autocomplete="username" required></label>
+              <label>Church password<input name="password" id="account-password" type="password" autocomplete="current-password"></label>
+              <label class="check-row"><input id="show-password" type="checkbox">Show password</label>
+              <button class="button button-primary" type="submit">Save account</button>
+            </form>
+
+            <section class="panel settings-card" id="drive-card">
+              <div class="settings-icon green"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.1 3h7.8l6.1 10.6-3.9 6.8H5.9L2 13.6 8.1 3Zm1.2 2-4.9 8.6 1.9 3.3 4.9-8.6L9.3 5Zm3.9 4.3L8.3 18h9.4l2-3.4-4.9-.1-1.6-5.2Z"/></svg></div>
+              <h2>Google Drive</h2>
+              <p class="connection-state" id="drive-state">Not connected</p>
+              <div class="button-row">
+                <button class="button button-primary" type="button" id="drive-connect">Connect Google Drive</button>
+                <button class="button button-secondary" type="button" id="drive-disconnect" hidden>Disconnect</button>
+              </div>
+              <form id="drive-folder-form">
+                <label>Upload into this folder<input id="drive-folder" name="link" placeholder="Paste the Drive folder link"></label>
+                <p class="field-help" id="drive-folder-name"></p>
+                <div class="button-row">
+                  <button class="button button-secondary" type="submit">Save folder</button>
+                  <button class="button button-secondary" type="button" id="drive-clear">Stop uploading</button>
+                </div>
+              </form>
+            </section>
+
+            <form class="panel settings-card" id="advanced-form">
+              <div class="settings-icon slate"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v2H3V5Zm0 6h12v2H3v-2Zm0 6h18v2H3v-2Z"/></svg></div>
+              <h2>Tableau connection</h2>
+              <p class="card-copy">The defaults work for most missions.</p>
+              <label>Tableau workbook link<input name="tableau_view_url" required></label>
+              <label>Single sign-on link (optional)<input name="tableau_sso_url"></label>
+              <label class="check-row"><input name="show_browser" type="checkbox">Show the browser while downloading</label>
+              <button class="button button-secondary" type="submit">Save connection</button>
+            </form>
+          </div>
+        </section>
+
+        <footer>
+          <span id="footer-version">Referral Dash</span>
+          <span>Reports are made on this computer.</span>
+        </footer>
+      </main>
+    </div>
+    <div id="toast-region" class="toast-region" aria-live="assertive"></div>
+  </body>
+</html>

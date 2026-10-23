@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+build/
+dist/
+.local/
+# Google OAuth client and tokens are distributed with releases, never committed.
+google_oauth_client.json
+google-token.json
+settings.json

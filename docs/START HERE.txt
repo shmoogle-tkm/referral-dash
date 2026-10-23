@@ -1,0 +1,39 @@
+REFERRAL DASH - START HERE
+==========================
+
+Referral Dash signs in to Tableau for you, downloads your mission's referrals,
+and makes area, district, zone and mission dashboards plus District Summaries.
+It can upload every run to a Google Drive folder.
+
+FIRST TIME (about 5 minutes)
+1. Right-click the ZIP > Extract All. Open the new folder.
+2. Double-click "Referral Dash.exe". The app opens in its own window.
+   (Windows may ask you to confirm the first time: More info > Run anyway.)
+3. Click Settings.
+   - Mission: type your mission name EXACTLY as Tableau's Mission filter shows
+     it (for example "Tennessee Knoxville Mission"), pick the time zone, Save.
+   - Church account: your missionary email, Church username and password.
+     They are saved in Windows Credential Manager on this computer only.
+   - Google Drive (optional): Connect Google Drive, sign in, then paste the
+     link of the Drive folder where reports should go and click Save folder.
+4. Optional: click "Try with sample data" to see what the reports look like.
+
+EVERY WEEK
+Open Referral Dash and click Run now. Wait for "Reports are ready".
+Click "Open folder" or "Open in Drive".
+
+District Summaries compare automatically with last week's run (the newest run
+at least five days older). The very first run has nothing to compare with yet.
+
+WHERE THINGS ARE KEPT
+- Reports: Documents\Referral Dash reports (change it on the Run page).
+- Settings and comparison history: %LOCALAPPDATA%\Referral Dash
+  (kept when you install a newer version).
+
+IF SOMETHING GOES WRONG
+- "Tableau has no mission named ...": fix the mission name in Settings.
+- Sign-in problems: check the Church account in Settings, then turn on
+  "Show the browser while downloading" under Tableau connection and run again
+  to watch what happens.
+- No Chrome or Edge window can open: install or update Microsoft Edge.
+- Already downloaded a CSV yourself? Click "Use a CSV I downloaded".
