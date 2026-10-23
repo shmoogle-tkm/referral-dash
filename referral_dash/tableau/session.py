@@ -15,6 +15,15 @@ class TableauSignInTimeout(RuntimeError):
     """A transient sign-in transition, safe to retry in a fresh browser."""
 
 
+class VerificationNeeded(RuntimeError):
+    """The Church sign-in wants an authenticator step that only a person can complete."""
+
+
+# After the password, a page that stays on the Church sign-in this long is an authenticator step.
+VERIFICATION_GRACE_SECONDS = 15
+VERIFICATION_TIMEOUT_SECONDS = 300
+
+
 def _sign_in_timeout(driver, phase):
     parsed = urlsplit(str(driver.current_url or ""))
     # Never include query strings, page text, cookies, or credentials in logs.
@@ -74,14 +83,34 @@ def _access_failure_message(driver) -> str | None:
     return None
 
 
+def _after_password(driver, next_state, on_verification):
+    try:
+        return WebDriverWait(driver, VERIFICATION_GRACE_SECONDS).until(next_state)
+    except TimeoutException:
+        still_signing_in = not _tableau_landing_url(driver.current_url) and not _access_failure_message(driver)
+        if on_verification is None or not still_signing_in:
+            raise
+    on_verification()
+    try:
+        return WebDriverWait(driver, VERIFICATION_TIMEOUT_SECONDS).until(next_state)
+    except TimeoutException as error:
+        raise RuntimeError(
+            f"The authenticator step was not finished within {VERIFICATION_TIMEOUT_SECONDS // 60} minutes. "
+            "Run again and approve the sign-in in the browser window that opens."
+        ) from error
+
+
 def login_tableau(
     driver, endpoint: str, *, email: str | None, username: str | None,
-    password: str | None, timeout: int = 60,
+    password: str | None, timeout: int = 60, on_verification=None,
 ) -> None:
     """Accept email, site, username, password, and already signed-in entry points.
 
     Credentials are read by callers for each run; no account identity or session
     is cached by this module. Only visible login fields receive credentials.
+    When the Church sign-in asks for an authenticator after the password,
+    `on_verification()` is called (it may raise VerificationNeeded to restart with
+    a visible browser) and the person gets several minutes to finish.
     """
     driver.implicitly_wait(0)
     driver.switch_to.default_content()
@@ -144,7 +173,10 @@ def login_tableau(
             return False
 
         try:
-            state = wait.until(next_state)
+            if field_id == "password-input":
+                state = _after_password(driver, next_state, on_verification)
+            else:
+                state = wait.until(next_state)
         except TimeoutException as error:
             access_message = _access_failure_message(driver)
             if access_message:

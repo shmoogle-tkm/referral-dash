@@ -4,6 +4,7 @@ import os
 import tempfile
 import time
 import unittest
+import unittest.mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -90,6 +91,22 @@ class ReportTests(Isolated):
                 with self.assertRaises(ValueError):
                     engine.generate_reports(target, folder, SETTINGS)
                 self.assertEqual(list(Path(folder).glob("Dashboard_*")), [])
+
+    def test_real_tableau_shapes_date_only_milestones_and_unplaced_rows(self):
+        def shape(rows):
+            rows = [{**row, "First New Person Being Taught Date": "8/30/2026" if row["First New Person Being Taught Date"] else ""}
+                    for row in rows] * 3
+            return rows + [{**rows[0], "Latest Zone Name": "", "Latest District Name": "", "Latest Teaching Area Name": ""}]
+        with tempfile.TemporaryDirectory() as folder:
+            mission, facts = engine.read_export(self.rewrite_sample(folder, shape), SETTINGS)
+            self.assertEqual((facts["referrals"], facts["skipped_rows"]), (24, 1))
+            self.assertEqual(mission.percent_found, 25)
+            mostly_unplaced = lambda rows: rows[:1] + [{**row, "Latest Zone Name": "Null"} for row in rows[1:]]
+            with self.assertRaisesRegex(ValueError, "no area assignment"):
+                engine.read_export(self.rewrite_sample(folder, mostly_unplaced), SETTINGS)
+            timed_column_without_time = lambda rows: [{**rows[0], "First Contact Attempt Event Date": "10/01/2026"}]
+            with self.assertRaisesRegex(ValueError, "hh:mm:ss"):
+                engine.read_export(self.rewrite_sample(folder, timed_column_without_time), SETTINGS)
 
     def test_utf8_comma_export(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -216,6 +233,23 @@ class TableauTests(unittest.TestCase):
         self.assertEqual(filters["Finding Source"], SOURCES)
         self.assertEqual(dashboard_entry_url("https://x.online.tableau.com/t/site/views/Book/View/123/Dashboard?a=1"),
                          "https://x.online.tableau.com/t/site/views/Book/View")
+
+    def test_authenticator_reopens_a_hidden_browser_and_asks_the_person(self):
+        from referral_dash.tableau import download
+        from referral_dash.tableau.session import VerificationNeeded
+        opened, asked = [], []
+
+        def fake_download(driver, settings, credentials, work, destination, progress, verification):
+            verification()  # The Church sign-in shows an authenticator prompt.
+            return "export.csv"
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(download, "create_browser", side_effect=lambda work, visible: opened.append(visible) or unittest.mock.MagicMock()), \
+                patch.object(download, "_download", side_effect=fake_download):
+            result = download.download_dashboard(SETTINGS, None, folder, attention=asked.append)
+        self.assertEqual(result, "export.csv")
+        self.assertEqual(opened, [False, True])  # Hidden first, then visible for the person.
+        self.assertEqual(asked, [download.VERIFY_MESSAGE])
+        self.assertTrue(issubclass(VerificationNeeded, RuntimeError))
 
     def test_download_date_check_rejects_unfiltered_exports(self):
         from referral_dash.tableau.download import validate_date_range

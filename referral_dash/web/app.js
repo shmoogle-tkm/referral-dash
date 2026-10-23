@@ -149,9 +149,11 @@ function renderRun(run) {
   panel.classList.remove("is-hidden");
   panel.classList.toggle("is-done", run.status === "done");
   panel.classList.toggle("is-failed", run.status === "failed");
+  const waiting = run.status === "running" && Boolean(run.attention);
+  panel.classList.toggle("is-attention", waiting);
   $("#active-work .work-spinner path").setAttribute("d", RUN_ICONS[run.status]);
-  $("#work-title").textContent = { running: "Making reports", done: "Reports are ready", failed: "The run stopped" }[run.status];
-  $("#work-message").textContent = run.status === "failed" ? run.error : run.message;
+  $("#work-title").textContent = waiting ? "Waiting for you" : { running: "Making reports", done: "Reports are ready", failed: "The run stopped" }[run.status];
+  $("#work-message").textContent = run.status === "failed" ? run.error : waiting ? run.attention : run.message;
   $("#work-time").textContent = elapsed(run);
   $("#work-percent").textContent = `${run.percent}%`;
   $("#work-bar").style.width = `${Math.max(run.percent, 1)}%`;
@@ -211,8 +213,9 @@ function render() {
   const running = run?.status === "running";
   const ready = renderSetup();
   const pill = $("#system-pill");
-  pill.className = "system-pill" + (running ? " is-busy" : run?.status === "failed" ? " has-error" : ready ? "" : " needs-setup");
-  $("#system-text").textContent = running ? "Running" : run?.status === "failed" ? "Last run failed" : ready ? "Ready" : "Setup needed";
+  const waiting = running && Boolean(run.attention);
+  pill.className = "system-pill" + (waiting ? " needs-setup" : running ? " is-busy" : run?.status === "failed" ? " has-error" : ready ? "" : " needs-setup");
+  $("#system-text").textContent = waiting ? "Needs you" : running ? "Running" : run?.status === "failed" ? "Last run failed" : ready ? "Ready" : "Setup needed";
   $("#brand-mission").textContent = state.configured ? state.settings.mission : "Mission reports";
   $("#footer-version").textContent = `Referral Dash ${state.version}`;
   renderRunCard(ready, running);

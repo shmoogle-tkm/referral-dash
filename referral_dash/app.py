@@ -162,7 +162,7 @@ class Controller:
             uploads = bool(settings["drive_folder"]) and source != "sample"
             self.run = {"id": secrets.token_hex(4), "status": "running", "source": source,
                         "started": datetime.now(timezone.utc).isoformat(), "finished": None,
-                        "message": "Starting...", "percent": 1, "error": "", "result": None,
+                        "message": "Starting...", "attention": "", "percent": 1, "error": "", "result": None,
                         "steps": [{"id": i, "label": label, "state": "pending", "detail": ""} for i, label in STEPS
                                   if i != "upload" or uploads]}
             if source != "tableau":
@@ -181,8 +181,14 @@ class Controller:
     def _progress(self, message, percent=None):
         with self.lock:
             self.run["message"] = message
+            self.run["attention"] = ""
             if percent is not None:
                 self.run["percent"] = max(self.run["percent"], min(99, round(percent)))
+
+    def _attention(self, message):
+        """The run is waiting on the person, e.g. for an authenticator approval."""
+        with self.lock:
+            self.run["attention"] = message
 
     def _work(self, source, filename, settings, login):
         current = "download"
@@ -193,7 +199,7 @@ class Controller:
                 self._step("download", "active")
                 from .tableau.download import download_dashboard
                 downloads = data_directory() / "downloads"
-                filename = download_dashboard(settings, login, downloads, lambda m: self._progress(m))
+                filename = download_dashboard(settings, login, downloads, lambda m: self._progress(m), self._attention)
                 for old in sorted(downloads.glob("tableau_export_*.csv"))[:-KEEP_DOWNLOADS]:
                     old.unlink(missing_ok=True)
                 self._step("download", "done", "Downloaded from Tableau")
@@ -216,7 +222,9 @@ class Controller:
                 fraction = done / total if done is not None and total else None
                 self._progress(message, base + span * fraction if fraction is not None else None)
             folder, facts = generate_reports(filename, output, settings, progress, history=history)
-            self._step("render", "done", f"{facts['images'] - facts['district_summaries']} dashboards")
+            skipped = facts["skipped_rows"]
+            self._step("render", "done", f"{facts['images'] - facts['district_summaries']} dashboards" +
+                       (f" · {skipped} row{'s' * (skipped != 1)} without an area left out" if skipped else ""))
             compared = facts["comparison_generated_utc"]
             self._step("summaries", "done", f"{facts['district_summaries']} districts" +
                        (f" · vs {datetime.fromisoformat(compared):%b %d}" if compared else " · first run, no comparison"))

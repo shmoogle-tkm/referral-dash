@@ -104,6 +104,10 @@ p { color: var(--muted); }
 .active-work { margin-bottom: 18px; padding: 18px 20px 20px; border: 1px solid #cfe0ff; border-radius: 14px; background: linear-gradient(112deg, #f7faff 0%, #eef5ff 62%, #f8fbff 100%); box-shadow: var(--shadow); }
 .active-work.is-hidden { display: none; }
 .active-work.is-failed { border-color: #f3c6cd; background: linear-gradient(112deg, #fffafb 0%, #fff1f3 100%); }
+.active-work.is-attention { border-color: #f3dfb8; background: linear-gradient(112deg, #fffdf7 0%, #fff8e7 100%); }
+.is-attention .work-spinner { color: var(--amber); }
+.is-attention .work-copy span { color: #8a611a; font-weight: 600; }
+.is-attention .work-percent { color: var(--amber); }
 .active-work.is-done { border-color: #c5ebd8; background: linear-gradient(112deg, #f8fefb 0%, #ecfdf3 100%); }
 .work-head { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto auto; gap: 16px; align-items: center; }
 .work-spinner { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px; background: #fff; color: var(--blue); box-shadow: 0 4px 14px rgba(37, 99, 235, 0.12); }

@@ -18,6 +18,19 @@ DATE_COLUMNS = ["First Referral Event Date", "First Contact Attempt Event Date",
                 "First Sacrament Date", "Latest Sacrament Date"]
 REQUIRED_COLUMNS = ["Full Name", "Latest Zone Name", "Latest District Name",
                     "Latest Teaching Area Name", *DATE_COLUMNS]
+TIMED_COLUMNS = DATE_COLUMNS[:2]
+MAX_SKIPPED_SHARE = 0.10
+PERIOD_COLUMN = "Event Date Selected"
+DAY_FORMAT = "%m/%d/%Y"
+
+
+def _parses(value, pattern):
+    try:
+        datetime.strptime(value, pattern)
+        return True
+    except ValueError:
+        return False
+
 
 def read_export(filename, settings):
     raw = Path(filename).read_bytes()
@@ -41,6 +54,7 @@ def read_export(filename, settings):
     reader.fieldnames = headers
     mission = Mission()
     rows = 0
+    skipped = 0
     dates = []
     for number, original in enumerate(reader, 2):
         if None in original or any(v is None for v in original.values()):
@@ -48,26 +62,33 @@ def read_export(filename, settings):
         row = {k: v.strip() for k, v in original.items()}
         if not any(row.values()):
             continue
-        for column in REQUIRED_COLUMNS[:4]:
-            if row[column].casefold() in ("", "null", "(null)"):
-                raise ValueError(f"Row {number}: {column} is blank/null. Review the source assignment or filter out Null in Tableau.")
         for column in DATE_COLUMNS:
             if row[column].casefold() in ("null", "(null)"):
                 row[column] = ""
             if row[column]:
-                try:
-                    datetime.strptime(row[column], DATE_FORMAT)
-                except ValueError as exc:
-                    raise ValueError(f"Row {number}: {column} has an unsupported date. Expected MM/DD/YYYY hh:mm:ss AM/PM in UTC. Keep the original Tableau export.") from exc
-        if not row[DATE_COLUMNS[0]]:
-            raise ValueError(f"Row {number}: First Referral Event Date is missing.")
-        dates.append(datetime.strptime(row[DATE_COLUMNS[0]], DATE_FORMAT))
+                # Response times need the full timestamp; the other milestones are
+                # only checked for being present, and Tableau exports some as dates only.
+                formats = (DATE_FORMAT,) if column in TIMED_COLUMNS else (DATE_FORMAT, DAY_FORMAT)
+                if not any(_parses(row[column], f) for f in formats):
+                    expected = "MM/DD/YYYY hh:mm:ss AM/PM" if column in TIMED_COLUMNS else "MM/DD/YYYY"
+                    raise ValueError(f"Row {number}: {column} has an unsupported date. Expected {expected} in UTC. Keep the original Tableau export.")
+        # Like the Data Hub, a row that cannot be placed in an area or has no referral is left out.
+        if not row[DATE_COLUMNS[0]] or any(row[c].casefold() in ("", "null", "(null)") for c in REQUIRED_COLUMNS[:4]):
+            skipped += 1
+            continue
+        # The Dashboard download is filtered on Event Date Selected, so that range describes it best.
+        selected = row.get(PERIOD_COLUMN, "")
+        dates.append(datetime.strptime(selected, DAY_FORMAT) if _parses(selected, DAY_FORMAT)
+                     else datetime.strptime(row[DATE_COLUMNS[0]], DATE_FORMAT))
         person = ReferralPerson(row, settings=settings)
         mission.add_person(person)
         rows += 1
     if not rows:
         raise ValueError("This export has no referral rows. Check the mission, date range, and filters in Tableau.")
-    return mission, {"referrals": rows, "first_referral_date": min(dates).strftime("%Y-%m-%d"),
+    if skipped > MAX_SKIPPED_SHARE * (rows + skipped):
+        raise ValueError(f"{skipped} of {rows + skipped} rows have no area assignment or referral date. "
+                         "Check the Tableau filters; this does not look like the Dashboard detail download.")
+    return mission, {"referrals": rows, "skipped_rows": skipped, "first_referral_date": min(dates).strftime("%Y-%m-%d"),
                      "last_referral_date": max(dates).strftime("%Y-%m-%d"),
                      "input_sha256": hashlib.sha256(raw).hexdigest()}
 
