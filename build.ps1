@@ -38,5 +38,9 @@ if ($result.status -ne "passed") { throw "Packaged self-test failed: $($result.e
 
 $zip = "dist\Referral-Dash-$version-Windows.zip"
 if (Test-Path $zip) { Remove-Item $zip }
-Compress-Archive -Path $release -DestinationPath $zip
+# The self-test exe can hold its file for a moment after exiting; retry instead of shipping nothing.
+for ($try = 1; -not (Test-Path $zip); $try++) {
+    try { Compress-Archive -Path $release -DestinationPath $zip -ErrorAction Stop }
+    catch { if ($try -ge 10) { throw "Could not create ${zip}: $_" }; Start-Sleep -Seconds 2 }
+}
 Write-Host "Built $zip ($($result.facts.images) sample images rendered by the packaged app)."

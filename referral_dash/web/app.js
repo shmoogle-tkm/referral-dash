@@ -89,7 +89,6 @@ function fillForms() {
   account.password.placeholder = state.account.saved ? "Saved · leave blank to keep it" : "";
   const advanced = $("#advanced-form");
   advanced.tableau_view_url.value = s.tableau_view_url;
-  advanced.tableau_sso_url.value = s.tableau_sso_url;
   advanced.show_browser.checked = s.show_browser;
   $("#drive-folder").value = state.drive.folder_link;
   formsFilled = true;
@@ -282,7 +281,7 @@ $("#account-form").addEventListener("submit", async (event) => {
 $("#advanced-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.target;
-  if (await act("/api/settings", { tableau_view_url: form.tableau_view_url.value, tableau_sso_url: form.tableau_sso_url.value, show_browser: form.show_browser.checked }, "Tableau connection saved.")) formsFilled = false;
+  if (await act("/api/settings", { tableau_view_url: form.tableau_view_url.value, show_browser: form.show_browser.checked }, "Tableau connection saved.")) formsFilled = false;
 });
 
 $("#drive-folder-form").addEventListener("submit", async (event) => {

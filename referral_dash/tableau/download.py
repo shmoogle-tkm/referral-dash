@@ -17,6 +17,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from ..group import TZ_LOOKUP
+from ..settings import data_directory
 from .dashboard import dashboard_entry_url
 from .session import TableauSignInTimeout, login_tableau, open_dashboard_view
 from .wait import set_date_filter
@@ -48,6 +49,18 @@ def create_browser(download_dir, show_browser=False):
     raise RuntimeError("Could not open Chrome or Microsoft Edge for the Tableau download. " + "; ".join(errors))
 
 
+def _save_evidence(driver):
+    """Keep a picture of the last browser page so a failed sign-in can be diagnosed."""
+    target = data_directory() / "tableau-failure.png"
+    try:
+        if driver is not None:
+            driver.save_screenshot(str(target))
+            return
+    except WebDriverException:
+        pass
+    target.unlink(missing_ok=True)
+
+
 def _wait_for_download(folder, before, timeout=120):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -71,8 +84,9 @@ def download_dashboard(settings, credentials, destination, progress=lambda messa
             progress("Opening a browser for Tableau...")
             driver = create_browser(work.resolve(), settings["show_browser"])
             return _download(driver, settings, credentials, work, destination, progress)
-        except (TableauSignInTimeout, TimeoutException):
-            if attempt:
+        except Exception as error:
+            _save_evidence(driver)
+            if attempt or not isinstance(error, (TableauSignInTimeout, TimeoutException)):
                 raise
             progress("Tableau was slow to respond; trying once more...")
         finally:
@@ -88,7 +102,7 @@ def _download(driver, settings, credentials, work, destination, progress):
     driver.get(entry)
     progress("Signing in to Tableau...")
     login_tableau(driver, entry, email=credentials.email, username=credentials.username,
-                  password=credentials.password, sso_endpoint=settings["tableau_sso_url"] or None)
+                  password=credentials.password)
     progress("Opening the Dashboard view...")
     open_dashboard_view(driver, settings["mission"], zone)
 

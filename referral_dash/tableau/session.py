@@ -76,7 +76,7 @@ def _access_failure_message(driver) -> str | None:
 
 def login_tableau(
     driver, endpoint: str, *, email: str | None, username: str | None,
-    password: str | None, sso_endpoint: str | None = None, timeout: int = 60,
+    password: str | None, timeout: int = 60,
 ) -> None:
     """Accept email, site, username, password, and already signed-in entry points.
 
@@ -94,7 +94,7 @@ def login_tableau(
         current = _login_state(browser)
         if current:
             return current
-        if sso_endpoint and "/views/" not in browser.current_url and _tableau_landing_url(browser.current_url):
+        if "/views/" not in browser.current_url and _tableau_landing_url(browser.current_url):
             browser.get(endpoint)
             return _login_state(browser)
         return False
@@ -130,7 +130,9 @@ def login_tableau(
         field.submit()
 
         def next_state(browser):
-            if field_id == "password-input" and sso_endpoint:
+            # After the Church password, Tableau may land on its home page instead of the
+            # requested view; any signed-in Tableau page means the hand-off finished.
+            if field_id == "password-input":
                 if _tableau_landing_url(browser.current_url) and not browser.find_elements(By.ID, "password-input"):
                     return "sso-complete", None
             current = _login_state(browser)

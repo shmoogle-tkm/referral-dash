@@ -14,7 +14,7 @@ DEFAULT_TABLEAU_VIEW = ("https://prod-useast-b.online.tableau.com/t/churchofjesu
                         "MissionFindingSummaryStephen/MissionFindingDetail")
 DEFAULTS = {"mission": "Your Mission", "lightning": 5, "pepper": 20,
             "start_time": "06:30", "cutoff_time": "22:00", "timezones": {"default": "UTC"},
-            "tableau_view_url": DEFAULT_TABLEAU_VIEW, "tableau_sso_url": "", "lookback_days": 30,
+            "tableau_view_url": DEFAULT_TABLEAU_VIEW, "lookback_days": 30,
             "show_browser": False, "output_folder": "", "drive_folder": "", "drive_folder_name": ""}
 # Only these settings change the numbers, so only these must match between compared runs.
 METRIC_KEYS = ("mission", "start_time", "cutoff_time", "timezones")
@@ -79,7 +79,7 @@ def validate_settings(data):
     if not re.match(r"https://[^/]+\.online\.tableau\.com/t/[^/]+/views/[^/]+/[^/]+", url):
         raise ValueError("The Tableau link must look like https://...online.tableau.com/t/SITE/views/WORKBOOK/VIEW.")
     result["tableau_view_url"] = url
-    result["tableau_sso_url"] = str(result["tableau_sso_url"]).strip()
+    result.pop("tableau_sso_url", None)  # Retired: the Church sign-in hand-off is handled automatically.
     result["show_browser"] = bool(result["show_browser"])
     result["output_folder"] = str(result["output_folder"]).strip()
     result["drive_folder"] = drive_folder_id(result["drive_folder"])

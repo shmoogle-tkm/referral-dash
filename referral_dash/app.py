@@ -98,7 +98,7 @@ class Controller:
     def save_settings(self, body):
         current = load_settings()
         allowed = {"mission", "lightning", "pepper", "start_time", "cutoff_time", "timezones",
-                   "tableau_view_url", "tableau_sso_url", "lookback_days", "show_browser"}
+                   "tableau_view_url", "lookback_days", "show_browser"}
         return save_settings({**current, **{k: v for k, v in body.items() if k in allowed}})
 
     def save_account(self, body):
