@@ -35,6 +35,9 @@ FONT_ROOT = app_directory() / "fonts"
 SAMPLE = app_directory() / "sample-data" / "sample-referrals.csv"
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 IDLE_SECONDS = 150
+# A window that has not loaded the page by then is reopened; the last try uses the default browser.
+WINDOW_WAIT_SECONDS = 8
+WINDOW_ATTEMPTS = 3
 KEEP_DOWNLOADS = 3
 RECENT_RUNS = 8
 STEPS = [("download", "Get referrals"), ("render", "Make dashboards"), ("summaries", "District summaries")]
@@ -57,6 +60,11 @@ class Controller:
         self.run = None
         self.ui_tasks = queue.Queue()
         self.last_seen = time.monotonic()
+        self.window_connected = False
+
+    def seen(self):
+        self.last_seen = time.monotonic()
+        self.window_connected = True
 
     # ----- state -----
     def state(self):
@@ -246,7 +254,10 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/"):
             if not self._authorized():
                 return self._json({"error": "Unauthorized"}, HTTPStatus.FORBIDDEN)
-            self.controller.last_seen = time.monotonic()
+            if path == "/api/seen":
+                # Asked by a second launch; it must not count as the window being open.
+                return self._json({"idle": time.monotonic() - self.controller.last_seen})
+            self.controller.seen()
             if path == "/api/state":
                 try:
                     return self._json(self.controller.state())
@@ -264,7 +275,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self._authorized():
             return self._json({"error": "Unauthorized"}, HTTPStatus.FORBIDDEN)
-        self.controller.last_seen = time.monotonic()
+        self.controller.seen()
         length = int(self.headers.get("Content-Length") or 0)
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
@@ -314,6 +325,50 @@ def open_window(url):
         webbrowser.open(url)
 
 
+class WindowWatch:
+    """Reopen a window that never loads the page.
+
+    Edge hands a new window to a running instance of the same profile; when that
+    instance is still closing (the previous window was just shut), the new window is lost.
+    """
+
+    def __init__(self, url, now=None):
+        self.url = url
+        self.attempts = 1
+        self.launched = time.monotonic() if now is None else now
+        self.done = False
+
+    def check(self, connected, now=None):
+        """Call about once a second; `connected` means the page has loaded since the last launch."""
+        now = time.monotonic() if now is None else now
+        if connected:
+            self.done = True
+        if self.done or now - self.launched < WINDOW_WAIT_SECONDS:
+            return
+        if self.attempts >= WINDOW_ATTEMPTS:
+            self.done = True
+            return
+        self.attempts += 1
+        self.launched = now
+        (open_window if self.attempts < WINDOW_ATTEMPTS else webbrowser.open)(self.url)
+
+
+def _show_existing(info):
+    """Open a window onto the copy that is already running, and make sure it loads."""
+    url = f"http://{HOST}:{info['port']}/#t={info['token']}"
+    open_window(url)
+    watch = WindowWatch(url)
+    request = Request(f"http://{HOST}:{info['port']}/api/seen", headers={"X-Session": info["token"]})
+    while not watch.done:
+        time.sleep(1)
+        try:
+            with urlopen(request, timeout=2) as response:
+                idle = json.loads(response.read())["idle"]
+        except (OSError, ValueError, KeyError, URLError):
+            return  # The running copy has closed; nothing left to show.
+        watch.check(idle < time.monotonic() - watch.launched)
+
+
 def _existing_instance():
     marker = data_directory() / "instance.json"
     try:
@@ -347,7 +402,7 @@ def _run_picker(kind, settings):
 def main():
     existing = _existing_instance()
     if existing:
-        open_window(f"http://{HOST}:{existing['port']}/#t={existing['token']}")
+        _show_existing(existing)
         return
     # No other copy is running, so the browser profiles are free to tidy.
     prune_app_data()
@@ -359,10 +414,12 @@ def main():
     (data_directory() / "instance.json").write_text(json.dumps({"port": port, "token": token}), encoding="utf-8")
     threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.5}, daemon=True).start()
     url = f"http://{HOST}:{port}/#t={token}"
+    watch = None
     if os.getenv("REFERRAL_DASH_NO_WINDOW") == "1":
         print(url, flush=True)  # For automated UI checks.
     else:
         open_window(url)
+        watch = WindowWatch(url)
     try:
         # The main thread owns native dialogs and decides when the closed window means "quit".
         while True:
@@ -375,6 +432,8 @@ def main():
                     answer.put(None)
             except queue.Empty:
                 pass
+            if watch and not watch.done:
+                watch.check(controller.window_connected)
             with controller.lock:
                 busy = bool(controller.run and controller.run["status"] == "running")
             if not busy and time.monotonic() - controller.last_seen > IDLE_SECONDS:

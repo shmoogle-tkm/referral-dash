@@ -427,6 +427,36 @@ class AppTests(Isolated):
         self.assertEqual(len(History(SETTINGS).snapshots()), 3)
         self.assertIsNotNone(results[2]["compared_with"])
 
+    def test_lost_window_is_reopened_then_falls_back_to_the_default_browser(self):
+        app = self.app
+        with patch.object(app, "open_window") as edge, patch.object(app.webbrowser, "open") as default:
+            watch = app.WindowWatch("url", now=0)
+            watch.check(False, now=app.WINDOW_WAIT_SECONDS - 1)
+            self.assertEqual((edge.call_count, default.call_count), (0, 0))
+            watch.check(False, now=app.WINDOW_WAIT_SECONDS)
+            self.assertEqual((edge.call_count, default.call_count), (1, 0))
+            watch.check(False, now=2 * app.WINDOW_WAIT_SECONDS)
+            self.assertEqual((edge.call_count, default.call_count), (1, 1))
+            watch.check(False, now=10 * app.WINDOW_WAIT_SECONDS)
+            self.assertTrue(watch.done)
+            self.assertEqual((edge.call_count, default.call_count), (1, 1))
+            loaded = app.WindowWatch("url", now=0)
+            loaded.check(True, now=1)
+            loaded.check(False, now=100)
+            self.assertTrue(loaded.done)
+            self.assertEqual(edge.call_count, 1)
+
+    def test_a_second_launch_can_ask_without_counting_as_the_window(self):
+        self.controller.last_seen -= 100
+        status, payload = self.call("/api/seen")
+        self.assertEqual(status, 200)
+        self.assertGreaterEqual(payload["idle"], 100)
+        self.assertFalse(self.controller.window_connected)
+        self.assertEqual(self.call("/api/seen", token="wrong")[0], 403)
+        self.call("/api/state")
+        self.assertTrue(self.controller.window_connected)
+        self.assertLess(self.call("/api/seen")[1]["idle"], 5)
+
     def test_window_files_and_fonts_are_served_but_nothing_else(self):
         for path, expected in (("/", 200), ("/styles.css", 200), ("/fonts/Nunito-Regular.ttf", 200),
                                ("/fonts/../settings.py", 404), ("/../settings.py", 404)):
