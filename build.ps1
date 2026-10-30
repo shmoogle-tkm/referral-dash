@@ -1,6 +1,4 @@
 # Builds dist\Referral-Dash-<version>-Windows.zip from a clean checkout.
-# Put google_oauth_client.json (a Google Cloud "Desktop app" OAuth client) in the
-# repository root first if the release should offer Google Drive uploads.
 # Native tools write progress to stderr, so failures are detected by exit code.
 $ErrorActionPreference = "Continue"
 Set-Location $PSScriptRoot
@@ -21,11 +19,6 @@ New-Item -ItemType Directory $release | Out-Null
 Copy-Item "dist\Referral Dash.exe" $release
 Copy-Item licenses $release\Licenses -Recurse
 Copy-Item "docs\START HERE.txt" $release
-if (Test-Path google_oauth_client.json) {
-    Copy-Item google_oauth_client.json $release
-} else {
-    Write-Warning "google_oauth_client.json is missing: this build cannot upload to Google Drive."
-}
 
 # The exact packaged executable must render the sample before the ZIP is made.
 $check = Join-Path $env:TEMP "referral-dash-selftest"

@@ -16,7 +16,7 @@ from referral_dash import engine
 from referral_dash.district_summary import BAD, GOOD, MUTED, percent_change, period_label, trend
 from referral_dash.group import ReferralPerson
 from referral_dash.history import History, select_previous
-from referral_dash.settings import DEFAULTS, app_directory, drive_folder_id, validate_settings
+from referral_dash.settings import DEFAULTS, app_directory, validate_settings
 
 SAMPLE = app_directory() / "sample-data" / "sample-referrals.csv"
 SETTINGS = validate_settings({"mission": "Sample Mission"})
@@ -162,8 +162,8 @@ class ComparisonTests(Isolated):
             self.assertEqual(third["comparison_generated_utc"], first["generated_utc"])
             other = History(validate_settings({"mission": "Other Mission"}))
             self.assertEqual(other.snapshots(), [])
-            # Output and Drive choices do not change the numbers, so they keep the same history.
-            moved = History(validate_settings({**SETTINGS, "output_folder": "D:/elsewhere", "drive_folder": "1234567890abc"}))
+            # Where reports are saved and how many are kept do not change the numbers, so they keep the same history.
+            moved = History(validate_settings({**SETTINGS, "output_folder": "D:/elsewhere", "keep_reports": 2}))
             self.assertEqual(len(moved.snapshots()), 3)
 
     def test_version_one_reports_in_the_output_folder_become_baselines(self):
@@ -205,18 +205,30 @@ class SettingsTests(Isolated):
 
     def test_invalid_settings_and_windows_filenames(self):
         for data in ({"start_time": "22:00"}, {"pepper": 101}, {"timezones": {"default": "unknown"}},
-                     {"tableau_view_url": "https://example.com"}, {"lookback_days": 0}, {"drive_folder": "not a link!"}):
+                     {"tableau_view_url": "https://example.com"}, {"lookback_days": 0}, {"keep_reports": 101}):
             with self.subTest(data=data), self.assertRaises(ValueError):
                 validate_settings({**DEFAULTS, **data})
         self.assertEqual(engine.safe_name("CON"), "_CON")
         self.assertEqual(engine.safe_name("A/B"), "A-B")
 
-    def test_drive_links_and_ids(self):
-        folder = "1AbCdEfGhIjKlMnOpQrStUv"
-        for value in (folder, f"https://drive.google.com/drive/folders/{folder}?usp=sharing",
-                      f"https://drive.google.com/drive/u/1/folders/{folder}", f"https://drive.google.com/open?id={folder}"):
-            self.assertEqual(drive_folder_id(value), folder)
-        self.assertEqual(drive_folder_id(""), "")
+    def test_settings_from_the_drive_version_still_load(self):
+        from referral_dash import settings
+        old = {**DEFAULTS, "mission": "Old Mission", "drive_folder": "1xGTi7lEfAdrMMTrh", "drive_folder_name": "Dashboards",
+               "tableau_sso_url": "", "timezones": {"default": "EST", "hawaii": "HST"}, "lookback_days": 60}
+        old.pop("keep_reports")
+        settings.settings_path().write_text(json.dumps(old))
+        loaded = settings.load_settings()
+        self.assertEqual((loaded["mission"], loaded["lookback_days"], loaded["keep_reports"]), ("Old Mission", 60, 8))
+        self.assertEqual(loaded["timezones"], {"default": "EST", "hawaii": "HST"})
+        self.assertFalse({"drive_folder", "drive_folder_name", "tableau_sso_url"} & loaded.keys())
+
+    def test_time_zone_guess_comes_from_this_computer(self):
+        from referral_dash import settings
+        for offset, daylight, expected in ((18000, 1, "EST"), (21600, 1, "CST"), (25200, 1, "MST"),
+                                           (25200, 0, "MST_NO_DST"), (36000, 0, "HST"), (-3600, 1, "UTC")):
+            with self.subTest(offset=offset, daylight=daylight), \
+                    patch.object(settings.time, "timezone", offset), patch.object(settings.time, "daylight", daylight):
+                self.assertEqual(settings.suggested_timezone(), expected)
 
     def test_version_one_settings_beside_the_app_are_carried_forward(self):
         from referral_dash import settings
@@ -234,6 +246,15 @@ class TableauTests(unittest.TestCase):
         self.assertEqual(filters["Finding Source"], SOURCES)
         self.assertEqual(dashboard_entry_url("https://x.online.tableau.com/t/site/views/Book/View/123/Dashboard?a=1"),
                          "https://x.online.tableau.com/t/site/views/Book/View")
+
+    def test_unknown_mission_suggests_the_closest_tableau_names(self):
+        from referral_dash.tableau.dashboard import missing_mission_message
+        choices = ["(All)", "Tennessee Knoxville Mission", "Tennessee Nashville Mission", "Utah Provo Mission"]
+        self.assertIn("Did you mean 'Tennessee Knoxville Mission'?", missing_mission_message("knoxville", choices))
+        self.assertIn("'Tennessee Knoxville Mission'", missing_mission_message("Tennesee Knoxvile Mission", choices))
+        message = missing_mission_message("Brazil Recife Mission", choices)
+        self.assertNotIn("Did you mean", message)
+        self.assertIn("Fix the mission name in Settings", message)
 
     def test_authenticator_reopens_a_hidden_browser_and_asks_the_person(self):
         from referral_dash.tableau import download
@@ -265,43 +286,59 @@ class TableauTests(unittest.TestCase):
                 validate_date_range(path, datetime(2026, 10, 2).date())
 
 
-class DriveTests(Isolated):
-    def test_upload_recreates_the_run_folder_in_parallel(self):
-        import threading
-        from referral_dash import drive
-        created, threads = [], set()
-
-        class Request:
-            def __init__(self, body):
-                self.body = body
-
-            def execute(self, num_retries):
-                threads.add(threading.get_ident())
-                created.append(self.body)
-                return {"id": f"id-{len(created)}"}
-
-        class Service:
-            def files(self):
-                return self
-
-            def create(self, body, fields, supportsAllDrives, media_body=None):
-                return Request(body)
-
-        with tempfile.TemporaryDirectory() as folder:
-            run = Path(folder) / "Dashboard_X"
-            for sub in ("1. Areas", "5. District Summaries"):
-                (run / sub).mkdir(parents=True)
-                for i in range(6):
-                    (run / sub / f"{i}.jpg").write_bytes(b"x")
+class CleanupTests(Isolated):
+    def make_run(self, parent, name, finished=True):
+        run = Path(parent) / name
+        (run / "1. Areas").mkdir(parents=True)
+        (run / "1. Areas" / "a.jpg").write_bytes(b"x")
+        if finished:
             (run / "run-summary.json").write_text("{}")
-            calls = []
-            with patch.object(drive, "_credentials", return_value=object()),                     patch.object(drive, "_service", side_effect=lambda creds=None: Service()),                     patch("referral_dash.drive.copy", side_effect=lambda c: c),                     patch("googleapiclient.http.MediaFileUpload"):
-                link = drive.upload_run(run, "parent", lambda m, done=None, total=None: calls.append((done, total)))
-        folders = [b for b in created if b.get("mimeType") == drive.FOLDER_TYPE]
-        self.assertEqual([f["name"] for f in folders], ["Dashboard_X", "1. Areas", "5. District Summaries"])
-        self.assertEqual(len(created) - len(folders), 13)
-        self.assertEqual(calls[-1], (13, 13))
-        self.assertTrue(link.endswith("/id-1"))
+        return run
+
+    def test_keeps_only_the_newest_report_sets_it_made(self):
+        from referral_dash.cleanup import prune_reports
+        with tempfile.TemporaryDirectory() as folder:
+            runs = [self.make_run(folder, f"Dashboard_2026-10-{day:02d}_090000_abc123") for day in (1, 8, 15, 22, 29)]
+            unfinished = self.make_run(folder, "Dashboard_2026-09-01_090000_old000", finished=False)
+            mine = Path(folder) / "My notes"
+            mine.mkdir()
+            removed = prune_reports(folder, 2)
+            self.assertEqual(sorted(removed), runs[:3])
+            self.assertEqual([r.exists() for r in runs], [False, False, False, True, True])
+            # Folders the app cannot prove it finished, and the person's own folders, are never touched.
+            self.assertTrue(unfinished.exists() and mine.exists())
+            self.assertEqual(prune_reports(folder, 0), [])
+            self.assertTrue(runs[3].exists())
+
+    def test_removes_abandoned_staging_folders_after_a_day(self):
+        from referral_dash.cleanup import prune_reports
+        with tempfile.TemporaryDirectory() as folder:
+            old, fresh = Path(folder) / ".building_old", Path(folder) / ".building_new"
+            old.mkdir()
+            fresh.mkdir()
+            day_ago = time.time() - 2 * 24 * 3600
+            os.utime(old, (day_ago, day_ago))
+            prune_reports(folder, 8)
+            self.assertEqual((old.exists(), fresh.exists()), (False, True))
+
+    def test_browser_caches_go_but_the_sign_in_stays(self):
+        from referral_dash.cleanup import prune_app_data
+        from referral_dash.settings import data_directory
+        home = data_directory()
+        profile = home / "browser" / "chrome"
+        for cache in ("Default/Cache/Cache_Data", "Default/Code Cache/js", "component_crx_cache"):
+            (profile / cache).mkdir(parents=True)
+            (profile / cache / "blob").write_bytes(b"x" * 1024)
+        (profile / "Default" / "Network").mkdir(parents=True)
+        (profile / "Default" / "Network" / "Cookies").write_bytes(b"session")
+        (home / "window" / "ProvenanceData").mkdir(parents=True)
+        (home / "google-token.json").write_text("{}")
+        prune_app_data()
+        self.assertTrue((profile / "Default" / "Network" / "Cookies").exists())
+        self.assertFalse((profile / "Default" / "Cache").exists())
+        self.assertFalse((profile / "component_crx_cache").exists())
+        self.assertFalse((home / "window" / "ProvenanceData").exists())
+        self.assertFalse((home / "google-token.json").exists())
 
 
 class AppTests(Isolated):
@@ -319,9 +356,6 @@ class AppTests(Isolated):
         self.keyring = keyring.start()
         self.keyring.get_password.return_value = None
         self.addCleanup(keyring.stop)
-        drive = patch.object(app.drive, "connected_account", return_value=None)
-        drive.start()
-        self.addCleanup(drive.stop)
         self.controller = app.Controller()
         handler = type("H", (app.Handler,), {"controller": self.controller, "token": "secret"})
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -352,10 +386,8 @@ class AppTests(Isolated):
         status, payload = self.call("/api/run", {"source": "tableau"})
         self.assertIn("Church account", payload["error"])
 
-    def test_sample_run_finishes_and_appears_in_past_reports(self):
-        from referral_dash.settings import load_settings, save_settings
-        save_settings({**load_settings(), "output_folder": self.output.name})
-        status, _ = self.call("/api/run", {"source": "sample"})
+    def finish(self, body):
+        status, _ = self.call("/api/run", body)
         self.assertEqual(status, 200)
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
@@ -364,10 +396,48 @@ class AppTests(Isolated):
                 break
             time.sleep(0.2)
         self.assertEqual(state["run"]["status"], "done", state["run"]["error"])
+        return state
+
+    def test_sample_runs_stay_out_of_the_real_reports_folder(self):
+        from referral_dash.settings import data_directory, load_settings, save_settings
+        save_settings({**load_settings(), "output_folder": self.output.name})
+        state = self.finish({"source": "sample"})
         self.assertEqual(state["run"]["result"]["summaries"], 2)
         self.assertEqual([s["id"] for s in state["run"]["steps"]], ["download", "render", "summaries"])
         self.assertTrue(all(s["state"] == "done" for s in state["run"]["steps"]))
-        self.assertEqual(len(state["recent"]), 1)
+        self.assertEqual(state["recent"], [])
+        self.assertEqual(list(Path(self.output.name).iterdir()), [])
+        self.finish({"source": "sample"})
+        self.assertEqual(len(list((data_directory() / "sample").glob("Dashboard_*"))), 1)
+
+    def test_csv_runs_keep_only_the_newest_report_sets(self):
+        from referral_dash.settings import load_settings, save_settings
+        save_settings({**load_settings(), "mission": "Sample Mission", "output_folder": self.output.name, "keep_reports": 2})
+        # Three different exports, so each run is its own comparison baseline.
+        inputs = []
+        for keep in (8, 7, 6):
+            folder = Path(tempfile.mkdtemp(dir=self.home.name))
+            inputs.append(str(self.rewrite_sample(folder, lambda rows, keep=keep: rows[:keep])))
+        with patch.object(self.controller, "ask_ui", side_effect=inputs):
+            results = [self.finish({"source": "file"})["run"]["result"] for _ in range(3)]
+        self.assertEqual([r["removed"] for r in results], [0, 0, 1])
+        state = self.call("/api/state")[1]
+        self.assertEqual([r["name"] for r in state["recent"]], [Path(results[i]["folder"]).name for i in (2, 1)])
+        # Comparison history is kept separately, so deleting report sets loses no baselines.
+        self.assertEqual(len(History(SETTINGS).snapshots()), 3)
+        self.assertIsNotNone(results[2]["compared_with"])
+
+    def test_window_files_and_fonts_are_served_but_nothing_else(self):
+        for path, expected in (("/", 200), ("/styles.css", 200), ("/fonts/Nunito-Regular.ttf", 200),
+                               ("/fonts/../settings.py", 404), ("/../settings.py", 404)):
+            with self.subTest(path=path):
+                try:
+                    with urlopen(self.base + path) as response:
+                        status = response.status
+                except Exception as error:
+                    with error:
+                        status = error.code
+                self.assertEqual(status, expected)
 
     def test_saving_settings_ignores_unknown_fields(self):
         status, _ = self.call("/api/settings", {"mission": "Utah Provo Mission", "output_folder": "C:/not-allowed"})

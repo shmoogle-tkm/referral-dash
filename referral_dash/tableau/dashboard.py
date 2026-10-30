@@ -3,6 +3,7 @@
 Adapted from the Referral Care Data Hub; the mission filter comes from settings."""
 from __future__ import annotations
 
+import difflib
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit, urlunsplit
 
@@ -30,6 +31,17 @@ def dashboard_filters(mission):
         ("Ad Group", ("(All)",)),
         ("Ad Topic old", ("(All)",)),
     )
+
+
+def missing_mission_message(mission, choices):
+    """Explain an unknown mission name, suggesting the closest names Tableau does list."""
+    names = [c for c in choices if c != "(All)"]
+    typed = " ".join(mission.split()).casefold()
+    # Containment catches "Knoxville" for "Tennessee Knoxville Mission"; difflib catches typos.
+    close = [n for n in names if typed and typed in n.casefold()]
+    close += [n for n in difflib.get_close_matches(mission, names, n=3, cutoff=0.6) if n not in close]
+    hint = f" Did you mean {' or '.join(repr(n) for n in close[:3])}?" if close else ""
+    return f"Tableau has no mission named {mission!r}.{hint} Fix the mission name in Settings, then run again."
 
 
 def dashboard_entry_url(endpoint: str | None) -> str | None:
@@ -108,7 +120,7 @@ def _set_quick_filter(driver, label, values, timeout):
     if "(All)" not in options:
         raise RuntimeError(f"Cannot recover Dashboard: {label} has no All selection.")
     if label == "Mission" and not set(values) <= options.keys():
-        raise RuntimeError(f"Tableau has no mission named {values[0]!r}. In Settings, enter the mission name exactly as Tableau lists it.")
+        raise RuntimeError(missing_mission_message(values[0], options.keys()))
     target = set(values)
     # Tableau's relevant-value domain can omit a source with no current rows.
     if label == "Finding Source":

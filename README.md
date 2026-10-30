@@ -17,12 +17,19 @@ One click:
    earlier run). Comparisons come from saved area aggregates in
    `%LOCALAPPDATA%\Referral Dash\history`, scoped to the mission, time zones
    and day window.
-4. **Uploads** the run folder to a chosen Google Drive folder (optional).
+4. **Cleans up** after itself: only the newest report sets are kept (8 by
+   default, changeable on the main screen), and browser caches in
+   `%LOCALAPPDATA%\Referral Dash` are pruned. Comparison history is separate,
+   so deleting old report sets never breaks "compared with last week".
+
+There is no cloud upload. To share reports, choose an output folder that
+Google Drive for desktop, OneDrive, or a shared drive already syncs.
 
 The UI is a local web page served on `127.0.0.1` behind a per-launch session
 token and shown in an Edge or Chrome app window, like the Data Hub control
-center. The design lives in Figma:
-[Referral Dash 2.0 — App redesign](https://www.figma.com/design/XcxUkYTyxkMAquqK1NGnMN).
+center. Since 2.1 it is a single dark screen styled after the report pictures
+(Cal Sans and Nunito, served from `referral_dash/fonts`), with a two-step
+first-time setup; rarely needed options sit under Settings > Advanced.
 
 ## Layout
 
@@ -34,7 +41,7 @@ center. The design lives in Figma:
 | `referral_dash/engine.py` | Export validation and complete, isolated report runs |
 | `referral_dash/district_summary.py` | District Summary renderer |
 | `referral_dash/history.py` | Automatic comparison baselines |
-| `referral_dash/drive.py` | Google Drive sign-in and upload |
+| `referral_dash/cleanup.py` | Keeps the newest report sets; prunes browser caches |
 | `referral_dash/credentials.py` | Church account in Windows Credential Manager |
 
 ## Develop
@@ -58,10 +65,3 @@ Set `REFERRAL_DASH_HOME` to use a scratch settings/history folder, and
 This runs the tests, builds `Referral Dash.exe` with PyInstaller, has the
 packaged exe render the sample (`--self-test`), and zips
 `dist\Referral Dash <version>`.
-
-Google Drive uploads need a Google Cloud OAuth client of type **Desktop app**
-saved as `google_oauth_client.json` in the repository root before building.
-It is copied next to the exe and is never committed. While the OAuth consent
-screen is in *Testing*, only accounts listed as test users can connect;
-publish the consent screen (Google verification is required for the Drive
-scope) before giving the app to other missions.

@@ -11,7 +11,7 @@ const token = (() => {
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
-const TITLES = { run: "Run reports", reports: "Past reports", settings: "Settings" };
+const DAY = 24 * 3600 * 1000;
 const STEP_ICONS = { pending: "", active: "", done: "✓", failed: "!" };
 const RUN_ICONS = {
   running: "M12 2a10 10 0 1 0 10 10h-3a7 7 0 1 1-7-7V2Z",
@@ -20,6 +20,8 @@ const RUN_ICONS = {
 };
 let state = null;
 let formsFilled = false;
+let view = null;
+let wasReady = null;
 
 async function api(path, body) {
   const response = await fetch(path, {
@@ -52,11 +54,12 @@ async function act(path, body, success) {
   }
 }
 
-function showView(name, focus) {
-  $$(".nav-item").forEach((item) => item.classList.toggle("is-active", item.dataset.view === name));
-  $$(".view").forEach((view) => view.classList.toggle("is-active", view.id === `${name}-view`));
-  $("#page-title").textContent = TITLES[name];
-  if (focus) setTimeout(() => document.getElementById(focus)?.focus(), 50);
+function showView(name) {
+  view = name;
+  $("#home-view").hidden = name !== "home";
+  $("#settings-view").hidden = name !== "settings";
+  $("#settings-button").hidden = name === "settings";
+  window.scrollTo(0, 0);
 }
 
 function escapeHtml(value) {
@@ -68,68 +71,80 @@ function shortDate(iso) {
 }
 
 function dateTime(iso) {
-  return iso ? new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+  return iso ? new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+}
+
+function daysAgo(iso) {
+  const days = Math.floor((Date.now() - new Date(iso)) / DAY);
+  return days <= 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
 }
 
 function folderName(path) {
   return path.split(/[\\/]/).filter(Boolean).pop() || path;
 }
 
+function overrides() {
+  return Object.fromEntries(Object.entries(state.settings.timezones).filter(([zone]) => zone !== "default"));
+}
+
 function fillForms() {
   const s = state.settings;
   const mission = $("#mission-form");
-  mission.mission.value = s.mission === "Your Mission" ? "" : s.mission;
+  mission.mission.value = state.configured ? s.mission : "";
   $("#timezone-select").innerHTML = state.timezones.map((zone) => `<option>${zone}</option>`).join("");
-  mission.timezone.value = s.timezones.default;
-  for (const key of ["lookback_days", "start_time", "cutoff_time", "lightning", "pepper"]) mission[key].value = s[key];
-  mission.overrides.value = Object.entries(s.timezones).filter(([zone]) => zone !== "default").map(([zone, tz]) => `${zone} = ${tz}`).join("\n");
+  // Until the mission is saved, guess the time zone from this computer.
+  mission.timezone.value = state.configured ? s.timezones.default : state.suggested_timezone;
   const account = $("#account-form");
   account.email.value = state.account.email;
   account.username.value = state.account.username;
-  account.password.placeholder = state.account.saved ? "Saved · leave blank to keep it" : "";
   const advanced = $("#advanced-form");
-  advanced.tableau_view_url.value = s.tableau_view_url;
+  for (const key of ["lookback_days", "start_time", "cutoff_time", "lightning", "pepper", "tableau_view_url"]) advanced[key].value = s[key];
+  advanced.overrides.value = Object.entries(overrides()).map(([zone, tz]) => `${zone} = ${tz}`).join("\n");
   advanced.show_browser.checked = s.show_browser;
-  $("#drive-folder").value = state.drive.folder_link;
+  $("#keep-select").value = String(s.keep_reports);
+  if (![...$("#keep-select").options].some((o) => o.value === String(s.keep_reports))) {
+    $("#keep-select").add(new Option(String(s.keep_reports), String(s.keep_reports)), 0);
+    $("#keep-select").value = String(s.keep_reports);
+  }
   formsFilled = true;
 }
 
-function renderSetup() {
-  const done = { mission: state.configured, account: state.account.saved, drive: Boolean(state.drive.account && state.drive.folder_id) };
-  $("#check-mission").classList.toggle("is-done", done.mission);
-  $("#check-account").classList.toggle("is-done", done.account);
-  $("#check-drive").classList.toggle("is-done", done.drive);
-  $("#setup-checklist").hidden = done.mission && done.account;
-  return done.mission && done.account;
+function renderSettings(ready) {
+  const setup = !ready;
+  document.body.classList.toggle("is-setup", setup);
+  $("#welcome").hidden = !setup;
+  $("#settings-head").hidden = setup;
+  $("#setup-alt").hidden = !setup;
+  $("#advanced").hidden = setup;
+  $("#account-step").textContent = state.account.saved ? "✓" : "1";
+  $("#account-step").classList.toggle("is-done", state.account.saved);
+  $("#mission-step").textContent = state.configured ? "✓" : "2";
+  $("#mission-step").classList.toggle("is-done", state.configured);
+  $("#account-note").textContent = state.account.saved ? "Saved on this computer" : "";
+  $("#account-password").placeholder = state.account.saved ? "Saved · leave blank to keep it" : "";
+  $("#mission-note").textContent = state.configured ? `Saved · ${state.settings.timezones.default}` : "";
 }
 
 function renderRunCard(ready, running) {
-  const badge = $("#run-badge");
-  badge.className = "status-badge " + (running ? "running" : ready ? "ready" : "setup");
-  badge.textContent = running ? "Running" : ready ? "Ready" : "Needs setup";
-  $("#run-button").disabled = running || !ready;
-  $("#run-button").textContent = running ? "Running…" : "Run now";
-  $$("[data-run='file'], [data-run='sample']").forEach((button) => (button.disabled = running));
-  const days = state.settings.lookback_days;
-  $("#run-description").textContent = `Signs in to Tableau, downloads the last ${days} days of referrals, builds every dashboard and district summary, compares with last week` +
-    (state.drive.folder_id ? ", and uploads everything to Google Drive." : ", and saves everything on this computer.");
-  $("#flow-drive").textContent = state.drive.folder_id ? "Drive" : "This PC";
-  $("#flow-drive").classList.toggle("is-off", !state.drive.folder_id);
+  const last = state.recent.find((run) => run.mission === state.settings.mission);
+  const due = !last || Date.now() - new Date(last.generated_utc) >= 6 * DAY;
+  $("#run-eyebrow").textContent = !ready ? "Almost there" : last ? `Last run ${shortDate(last.generated_utc)} · ${daysAgo(last.generated_utc)}` : "First run";
+  $("#run-title").textContent = !ready ? "Finish setup to make reports" : due ? "Make this week's reports" : "This week's reports are done";
+  $("#run-lede").textContent = !ready
+    ? "Add your Church account and mission in Settings. It takes a minute."
+    : `Signs in to Tableau, downloads the last ${state.settings.lookback_days} days of referrals, and makes every dashboard and district summary` +
+      (last ? ", compared with last week." : ".");
+  const button = $("#run-button");
+  button.disabled = running;
+  button.textContent = running ? "Running…" : !ready ? "Finish setup" : due ? "Run now" : "Run again";
+  button.classList.toggle("is-quiet", ready && !due && !running);
+  $$(".run-alternatives [data-run]").forEach((b) => (b.disabled = running));
 
   $("#output-name").textContent = folderName(state.output_folder);
   $("#output-path").textContent = state.output_folder;
   $("#output-path").title = state.output_folder;
-  if (state.drive.folder_id) {
-    $("#drive-name").textContent = state.drive.folder_name || "Drive folder";
-    $("#drive-detail").textContent = state.drive.account ? `as ${state.drive.account}` : "Reconnect Google Drive in Settings";
-  } else {
-    $("#drive-name").textContent = "Not set up";
-    $("#drive-detail").textContent = "Optional";
-  }
-  $("#drive-setup").textContent = state.drive.folder_id ? "Change" : "Set up";
-  const last = state.recent.find((run) => run.mission === state.settings.mission);
-  $("#compare-name").textContent = last ? `Automatic · last run ${shortDate(last.generated_utc)}` : "Automatic";
-  $("#compare-detail").textContent = "Compares with last week's run, or the latest earlier one";
+  const keep = state.settings.keep_reports;
+  $("#keep-help").textContent = keep ? "report sets. Older ones are deleted after each run to save space." : "report sets. Nothing is deleted.";
 }
 
 function elapsed(run) {
@@ -138,90 +153,79 @@ function elapsed(run) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-function renderRun(run) {
-  const panel = $("#active-work");
-  const result = $("#run-result");
-  if (!run) {
-    panel.classList.add("is-hidden");
-    result.hidden = true;
-    return;
-  }
-  panel.classList.remove("is-hidden");
-  panel.classList.toggle("is-done", run.status === "done");
-  panel.classList.toggle("is-failed", run.status === "failed");
+function renderWork(run) {
+  const panel = $("#work");
+  panel.hidden = !run;
+  if (!run) return;
   const waiting = run.status === "running" && Boolean(run.attention);
-  panel.classList.toggle("is-attention", waiting);
-  $("#active-work .work-spinner path").setAttribute("d", RUN_ICONS[run.status]);
+  panel.className = `card work is-${run.status}` + (waiting ? " is-attention" : "");
+  $("#work .work-icon path").setAttribute("d", RUN_ICONS[run.status]);
   $("#work-title").textContent = waiting ? "Waiting for you" : { running: "Making reports", done: "Reports are ready", failed: "The run stopped" }[run.status];
-  $("#work-message").textContent = run.status === "failed" ? run.error : waiting ? run.attention : run.message;
+  $("#work-message").textContent = run.status === "failed" ? run.error : waiting ? run.attention : run.status === "done" ? `Finished in ${elapsed(run)}` : run.message;
   $("#work-time").textContent = elapsed(run);
-  $("#work-percent").textContent = `${run.percent}%`;
-  $("#work-bar").style.width = `${Math.max(run.percent, 1)}%`;
+  $("#work-bar").style.width = `${run.status === "running" ? Math.max(run.percent, 2) : 100}%`;
   $("#work-steps").innerHTML = run.steps.map((step) => `
-    <div class="work-event is-${step.state}"><span>${STEP_ICONS[step.state]}</span>
-      <div><strong>${escapeHtml(step.label)}</strong><small>${escapeHtml(step.detail || { pending: "Waiting", active: "In progress", done: "Done", failed: "Failed" }[step.state])}</small></div></div>`).join("");
+    <li class="is-${step.state}"><span>${STEP_ICONS[step.state]}</span>
+      <div><strong>${escapeHtml(step.label)}</strong><small>${escapeHtml(step.detail || { pending: "Waiting", active: "In progress", done: "Done", failed: "Failed" }[step.state])}</small></div></li>`).join("");
 
+  const result = $("#work-result");
   result.hidden = run.status !== "done";
   if (run.status === "done") {
     const r = run.result;
     result.innerHTML = `
-      <div class="stat"><small>Dashboards</small><strong>${r.dashboards}</strong></div>
-      <div class="stat"><small>District summaries</small><strong>${r.summaries}</strong></div>
-      <div class="stat"><small>Referrals</small><strong>${r.referrals}</strong></div>
-      <div class="stat"><small>Compared with</small><strong class="small">${r.compared_with ? dateTime(r.compared_with) : "First run"}</strong></div>
-      <div class="result-actions">
-        <button class="button button-secondary" data-open="${escapeHtml(r.folder)}">Open folder</button>
-        ${r.drive_link ? `<button class="button button-primary" data-open="${escapeHtml(r.drive_link)}">Open in Drive</button>` : ""}
-      </div>`;
+      <div class="stat"><strong>${r.referrals}</strong><small>Referrals</small></div>
+      <div class="stat"><strong>${r.dashboards}</strong><small>Dashboards</small></div>
+      <div class="stat"><strong>${r.summaries}</strong><small>District summaries</small></div>
+      <div class="stat"><strong class="small">${r.compared_with ? shortDate(r.compared_with) : "—"}</strong><small>${r.compared_with ? "Compared with" : "First run"}</small></div>` +
+      (r.removed ? `<p class="result-note">Removed ${r.removed} older report set${r.removed === 1 ? "" : "s"} to save space.</p>` : "");
+  }
+  const actions = $("#work-actions");
+  actions.hidden = run.status === "running";
+  if (run.status === "done") {
+    actions.innerHTML = `<button class="button button-primary" data-open="${escapeHtml(run.result.folder)}">Open reports</button>`;
+  } else if (run.status === "failed") {
+    actions.innerHTML = `<button class="button button-primary" data-run="${escapeHtml(run.source)}">Try again</button>` +
+      (run.source === "tableau" ? `<button class="button" data-run="tableau" data-watch="1">Try again and show the browser</button>` : "") +
+      (/mission/i.test(run.error) ? `<button class="button" data-view="settings">Fix mission name</button>` : "");
   }
 }
 
 function renderReports() {
   const list = $("#report-list");
   if (!state.recent.length) {
-    list.innerHTML = `<p class="empty-state">No reports yet. Run reports to make your first set.</p>`;
+    list.innerHTML = `<p class="empty-state">No reports yet. Your first run will show up here.</p>`;
     return;
   }
   list.innerHTML = state.recent.map((run) => `
     <div class="report-row">
-      <span class="report-marker"></span>
-      <div class="report-main"><strong>${escapeHtml(run.mission || "Report")} · ${run.referrals ?? "?"} referrals</strong>
-        <span>${run.images ?? "?"} pictures · ${run.compared_with ? `compared with ${shortDate(run.compared_with)}` : "no comparison"}</span></div>
-      <span class="report-time">${dateTime(run.generated_utc)}</span>
-      <div class="report-actions">
-        <button class="button button-secondary" data-open="${escapeHtml(run.folder)}">Open</button>
-        ${run.drive_link ? `<button class="button button-secondary" data-open="${escapeHtml(run.drive_link)}">Drive</button>` : ""}
-      </div>
+      <div class="report-main"><strong>${dateTime(run.generated_utc)}</strong>
+        <span>${run.referrals ?? "?"} referrals · ${run.images ?? "?"} pictures · ${run.compared_with ? `vs ${shortDate(run.compared_with)}` : "no comparison"}</span></div>
+      <button class="button" data-open="${escapeHtml(run.folder)}">Open</button>
     </div>`).join("");
-}
-
-function renderDrive() {
-  const d = state.drive;
-  const status = $("#drive-state");
-  status.className = "connection-state" + (d.account ? " is-connected" : d.error ? " is-error" : "");
-  status.textContent = d.connecting ? "Finish signing in to Google in your browser…" : d.account ? `Connected as ${d.account}` : d.error || "Not connected";
-  $("#drive-connect").hidden = Boolean(d.account);
-  $("#drive-connect").disabled = d.connecting;
-  $("#drive-disconnect").hidden = !d.account;
-  $("#drive-folder-form").hidden = !d.account;
-  $("#drive-folder-name").textContent = d.folder_id ? `Uploading into “${d.folder_name || d.folder_id}”. Each run adds a dated folder.` : "Paste a folder link to upload every run there.";
-  $("#drive-clear").disabled = !d.folder_id;
 }
 
 function render() {
   const run = state.run;
   const running = run?.status === "running";
-  const ready = renderSetup();
-  const pill = $("#system-pill");
+  const ready = state.configured && state.account.saved;
   const waiting = running && Boolean(run.attention);
-  pill.className = "system-pill" + (waiting ? " needs-setup" : running ? " is-busy" : run?.status === "failed" ? " has-error" : ready ? "" : " needs-setup");
-  $("#system-text").textContent = waiting ? "Needs you" : running ? "Running" : run?.status === "failed" ? "Last run failed" : ready ? "Ready" : "Setup needed";
+  // Setup comes first; once it is finished, go straight to the run screen.
+  if (view === null) showView(ready ? "home" : "settings");
+  else if (ready && wasReady === false) {
+    showView("home");
+    toast("All set. Click Run now whenever you're ready.");
+  }
+  wasReady = ready;
+
+  const pill = $("#status-pill");
+  pill.className = "status-pill " + (waiting ? "is-warn" : running ? "is-busy" : run?.status === "failed" ? "is-error" : ready ? "is-ok" : "is-warn");
+  $("#status-text").textContent = waiting ? "Needs you" : running ? "Running" : run?.status === "failed" ? "Last run stopped" : ready ? "Ready" : "Setup needed";
   $("#brand-mission").textContent = state.configured ? state.settings.mission : "Mission reports";
   $("#footer-version").textContent = `Referral Dash ${state.version}`;
+  renderSettings(ready);
   renderRunCard(ready, running);
-  renderRun(run);
+  renderWork(run);
   renderReports();
-  renderDrive();
 }
 
 async function refresh() {
@@ -230,8 +234,8 @@ async function refresh() {
     if (!formsFilled) fillForms();
     render();
   } catch (error) {
-    $("#system-pill").className = "system-pill has-error";
-    $("#system-text").textContent = "Disconnected · reopen Referral Dash";
+    $("#status-pill").className = "status-pill is-error";
+    $("#status-text").textContent = "Disconnected · reopen Referral Dash";
   }
 }
 
@@ -239,57 +243,56 @@ document.addEventListener("click", async (event) => {
   const target = event.target.closest("button");
   if (!target) return;
   if (target.dataset.view) showView(target.dataset.view);
-  if (target.dataset.openView) showView(target.dataset.openView, target.dataset.focus);
   if (target.dataset.open) act("/api/open", { target: target.dataset.open });
   if (target.dataset.run) {
+    const ready = state.configured && state.account.saved;
+    if (target.dataset.run !== "sample" && !ready) return showView("settings");
+    showView("home");
     target.disabled = true;
-    await act("/api/run", { source: target.dataset.run });
+    await act("/api/run", { source: target.dataset.run, watch: Boolean(target.dataset.watch) });
     target.disabled = false;
   }
 });
 
 $("#output-change").addEventListener("click", () => act("/api/output-folder", {}));
-$("#open-output").addEventListener("click", () => act("/api/open", { target: state.output_folder }));
-$("#show-password").addEventListener("change", (event) => ($("#account-password").type = event.target.checked ? "text" : "password"));
-$("#drive-connect").addEventListener("click", () => act("/api/drive/connect", {}));
-$("#drive-disconnect").addEventListener("click", () => act("/api/drive/disconnect", {}, "Google Drive disconnected."));
-$("#drive-clear").addEventListener("click", async () => {
-  if (await act("/api/drive/folder", { link: "" }, "Reports will stay on this computer.")) $("#drive-folder").value = "";
+$("#output-open").addEventListener("click", () => act("/api/open", { target: state.output_folder }));
+$("#keep-select").addEventListener("change", (event) => act("/api/settings", { keep_reports: Number(event.target.value) }, "Saved."));
+$("#show-password").addEventListener("click", (event) => {
+  const field = $("#account-password");
+  field.type = field.type === "password" ? "text" : "password";
+  event.target.textContent = field.type === "password" ? "Show" : "Hide";
 });
 
 $("#mission-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.target;
-  const timezones = { default: form.timezone.value };
-  for (const line of form.overrides.value.split("\n")) {
-    if (!line.trim()) continue;
-    const at = line.lastIndexOf("=");
-    if (at < 1) return toast("Zone overrides look like: Hawaii = HST", true);
-    timezones[line.slice(0, at).trim()] = line.slice(at + 1).trim().toUpperCase();
-  }
-  const body = { mission: form.mission.value, timezones, lookback_days: form.lookback_days.value, start_time: form.start_time.value,
-                 cutoff_time: form.cutoff_time.value, lightning: form.lightning.value, pepper: form.pepper.value };
-  if (await act("/api/settings", body, "Mission saved.")) formsFilled = false;
+  // Zone overrides live under Advanced; keep them when the mission is saved.
+  const body = { mission: form.mission.value, timezones: { ...overrides(), default: form.timezone.value } };
+  await act("/api/settings", body, "Mission saved.");
 });
 
 $("#account-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.target;
-  if (await act("/api/account", { email: form.email.value, username: form.username.value, password: form.password.value }, "Church account saved in Windows Credential Manager.")) {
+  if (await act("/api/account", { email: form.email.value, username: form.username.value, password: form.password.value }, "Church account saved.")) {
     form.password.value = "";
-    formsFilled = false;
   }
 });
 
 $("#advanced-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.target;
-  if (await act("/api/settings", { tableau_view_url: form.tableau_view_url.value, show_browser: form.show_browser.checked }, "Tableau connection saved.")) formsFilled = false;
-});
-
-$("#drive-folder-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (await act("/api/drive/folder", { link: $("#drive-folder").value }, "Drive folder saved.")) formsFilled = false;
+  const timezones = { default: state.settings.timezones.default };
+  for (const line of form.overrides.value.split("\n")) {
+    if (!line.trim()) continue;
+    const at = line.lastIndexOf("=");
+    if (at < 1) return toast("Zone lines look like: Hawaii = HST", true);
+    timezones[line.slice(0, at).trim()] = line.slice(at + 1).trim().toUpperCase();
+  }
+  const body = { timezones, lookback_days: form.lookback_days.value, start_time: form.start_time.value, cutoff_time: form.cutoff_time.value,
+                 lightning: form.lightning.value, pepper: form.pepper.value, tableau_view_url: form.tableau_view_url.value,
+                 show_browser: form.show_browser.checked };
+  await act("/api/settings", body, "Advanced settings saved.");
 });
 
 refresh();

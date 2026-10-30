@@ -17,6 +17,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
+from ..cleanup import prune_browser_profile
 from ..group import TZ_LOOKUP
 from ..settings import data_directory
 from .dashboard import dashboard_entry_url
@@ -33,6 +34,8 @@ def _options(kind, download_dir, show_browser):
     # A saved profile keeps the Church/Tableau sign-in between runs, so an approved
     # ("remember this device") authenticator is not asked for every time.
     options.add_argument(f"--user-data-dir={data_directory() / 'browser' / kind}")
+    # Background component downloads only fill the profile; Tableau needs none of them.
+    options.add_argument("--disable-component-update")
     if not show_browser:
         options.add_argument("--headless=new")
         options.add_argument("--window-size=1920,1080")
@@ -123,6 +126,8 @@ def download_dashboard(settings, credentials, destination, progress=lambda messa
             if driver is not None:
                 driver.quit()
             shutil.rmtree(work, ignore_errors=True)
+            for kind in ("chrome", "edge"):
+                prune_browser_profile(data_directory() / "browser" / kind)
 
 
 def _download(driver, settings, credentials, work, destination, progress, verification):

@@ -9,7 +9,7 @@ PICTURE_SUFFIX = ".jpg"
 
 
 def save_picture(img, output_path):
-    """JPEG keeps a run about 8x smaller than PNG, which matters for Drive uploads."""
+    """JPEG keeps a run about 8x smaller than PNG, which keeps the reports folder small."""
     if str(output_path).lower().endswith((".jpg", ".jpeg")):
         img.convert("RGB").save(output_path, "JPEG", quality=88, optimize=True)
     else:

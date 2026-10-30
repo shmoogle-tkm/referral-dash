@@ -3,10 +3,11 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 APP_NAME = "Referral Dash"
 TIMEZONES = ["UTC", "EST", "CST", "MST", "MST_NO_DST", "PST", "AKST", "HST"]
 # The mission finding workbook used by the Referral Care Data Hub.
@@ -15,10 +16,13 @@ DEFAULT_TABLEAU_VIEW = ("https://prod-useast-b.online.tableau.com/t/churchofjesu
 DEFAULTS = {"mission": "Your Mission", "lightning": 5, "pepper": 20,
             "start_time": "06:30", "cutoff_time": "22:00", "timezones": {"default": "UTC"},
             "tableau_view_url": DEFAULT_TABLEAU_VIEW, "lookback_days": 30,
-            "show_browser": False, "output_folder": "", "drive_folder": "", "drive_folder_name": ""}
+            "show_browser": False, "output_folder": "", "keep_reports": 8}
 # Only these settings change the numbers, so only these must match between compared runs.
 METRIC_KEYS = ("mission", "start_time", "cutoff_time", "timezones")
-DRIVE_FOLDER = re.compile(r"(?:folders/|id=)([A-Za-z0-9_-]{10,})|^([A-Za-z0-9_-]{10,})$")
+# Retired settings, dropped when an older settings file is read.
+RETIRED_KEYS = ("tableau_sso_url", "drive_folder", "drive_folder_name")
+# Standard UTC offsets (seconds west, as time.timezone reports them) of the supported zones.
+ZONE_OFFSETS = {18000: "EST", 21600: "CST", 25200: "MST", 28800: "PST", 32400: "AKST", 36000: "HST"}
 
 
 def app_directory():
@@ -42,15 +46,11 @@ def settings_path():
     return data_directory() / "settings.json"
 
 
-def drive_folder_id(value):
-    """Accept a Google Drive folder link or a bare folder ID."""
-    value = (value or "").strip()
-    if not value:
-        return ""
-    match = DRIVE_FOLDER.search(value)
-    if not match:
-        raise ValueError("Paste the Google Drive folder link from your browser's address bar.")
-    return match.group(1) or match.group(2)
+def suggested_timezone():
+    """This computer's time zone, as the closest supported choice; a first guess for setup."""
+    zone = ZONE_OFFSETS.get(time.timezone, "UTC")
+    # Arizona keeps Mountain Standard Time all year.
+    return "MST_NO_DST" if zone == "MST" and not time.daylight else zone
 
 
 def validate_settings(data):
@@ -79,11 +79,13 @@ def validate_settings(data):
     if not re.match(r"https://[^/]+\.online\.tableau\.com/t/[^/]+/views/[^/]+/[^/]+", url):
         raise ValueError("The Tableau link must look like https://...online.tableau.com/t/SITE/views/WORKBOOK/VIEW.")
     result["tableau_view_url"] = url
-    result.pop("tableau_sso_url", None)  # Retired: the Church sign-in hand-off is handled automatically.
+    for key in RETIRED_KEYS:
+        result.pop(key, None)
     result["show_browser"] = bool(result["show_browser"])
     result["output_folder"] = str(result["output_folder"]).strip()
-    result["drive_folder"] = drive_folder_id(result["drive_folder"])
-    result["drive_folder_name"] = str(result["drive_folder_name"]).strip() if result["drive_folder"] else ""
+    result["keep_reports"] = int(result["keep_reports"])
+    if not 0 <= result["keep_reports"] <= 100:
+        raise ValueError("Keep between 1 and 100 report sets, or 0 to keep them all.")
     return result
 
 
