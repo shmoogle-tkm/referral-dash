@@ -20,8 +20,10 @@ from selenium.webdriver.support.ui import WebDriverWait
 from ..cleanup import prune_browser_profile
 from ..group import TZ_LOOKUP
 from ..settings import data_directory
-from .dashboard import dashboard_entry_url
+from ..settings import is_configured
+from .dashboard import choose_mission, dashboard_entry_url, read_filter_choices
 from .session import TableauSignInTimeout, VerificationNeeded, login_tableau, open_dashboard_view
+from .wait import dismiss_post_login_dialog, switch_to_frame_containing
 from .wait import set_date_filter
 
 
@@ -84,10 +86,11 @@ def _wait_for_download(folder, before, timeout=120):
 
 
 def download_dashboard(settings, credentials, destination, period, progress=lambda message: None,
-                       attention=lambda message: None):
+                       attention=lambda message: None, found_mission=lambda name: None):
     """Download the Dashboard crosstab covering `period` and its comparison range; return the file path.
 
     `attention(message)` is called when the person must act in the browser window.
+    `found_mission(name)` gets the mission read from Tableau when settings have none yet.
     """
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
@@ -111,7 +114,8 @@ def download_dashboard(settings, credentials, destination, period, progress=lamb
                 except WebDriverException:
                     pass
                 attention(VERIFY_MESSAGE)
-            return _download(driver, settings, credentials, work, destination, period, progress, verification)
+            return _download(driver, settings, credentials, work, destination, period, progress, verification,
+                             found_mission)
         except VerificationNeeded:
             # The authenticator needs a person, which a hidden browser cannot offer.
             visible = True
@@ -130,7 +134,8 @@ def download_dashboard(settings, credentials, destination, period, progress=lamb
                 prune_browser_profile(data_directory() / "browser" / kind)
 
 
-def _download(driver, settings, credentials, work, destination, period, progress, verification):
+def _download(driver, settings, credentials, work, destination, period, progress, verification,
+              found_mission=lambda name: None):
     zone = TZ_LOOKUP[settings["timezones"]["default"]]
     entry = dashboard_entry_url(settings["tableau_view_url"])
     wait = WebDriverWait(driver, 60)
@@ -138,8 +143,16 @@ def _download(driver, settings, credentials, work, destination, period, progress
     progress("Signing in to Tableau...")
     login_tableau(driver, entry, email=credentials.email, username=credentials.username,
                   password=credentials.password, on_verification=verification)
+    mission = settings["mission"]
+    if not is_configured(settings):
+        # Each account sees only its own mission in Tableau, so there is nothing to type in setup.
+        progress("Finding your mission in Tableau...")
+        dismiss_post_login_dialog(driver)
+        switch_to_frame_containing(driver, By.CSS_SELECTOR, 'textarea[aria-label*="Start Date"]', timeout=60)
+        mission = choose_mission(read_filter_choices(driver, "Mission"))
+        found_mission(mission)
     progress("Opening the Dashboard view...")
-    open_dashboard_view(driver, settings["mission"], zone)
+    open_dashboard_view(driver, mission, zone)
 
     first, last = period.download_start, period.end
     progress(f"Filtering referrals from {first:%b %d} to {last:%b %d}...")

@@ -12,6 +12,28 @@ const token = (() => {
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const DAY = 24 * 3600 * 1000;
+// US zones by their everyday names; the rest by city, grouped by region.
+const US_ZONES = [["America/New_York", "Eastern (US)"], ["America/Chicago", "Central (US)"], ["America/Denver", "Mountain (US)"],
+                  ["America/Phoenix", "Arizona (US)"], ["America/Los_Angeles", "Pacific (US)"], ["America/Anchorage", "Alaska (US)"],
+                  ["Pacific/Honolulu", "Hawaii (US)"]];
+
+function zoneLabel(zone) {
+  const us = US_ZONES.find(([value]) => value === zone);
+  return us ? us[1] : zone.split("/").slice(1).join(" / ").replaceAll("_", " ") || zone;
+}
+
+function zoneOptions() {
+  const option = (zone, label = zoneLabel(zone)) => `<option value="${escapeHtml(zone)}">${escapeHtml(label)}</option>`;
+  const regions = {};
+  for (const zone of state.timezones) {
+    const region = zone.includes("/") ? zone.split("/")[0] : "Other";
+    (regions[region] ||= []).push(zone);
+  }
+  return `<option value="auto">Automatic · ${escapeHtml(zoneLabel(state.suggested_timezone))} (this computer)</option>` +
+    `<optgroup label="United States">${US_ZONES.map(([zone, label]) => option(zone, label)).join("")}</optgroup>` +
+    Object.entries(regions).map(([region, zones]) =>
+      `<optgroup label="${escapeHtml(region)}">${zones.sort((a, b) => zoneLabel(a).localeCompare(zoneLabel(b))).map((z) => option(z)).join("")}</optgroup>`).join("");
+}
 const STEP_ICONS = { pending: "", active: "", done: "✓", failed: "!" };
 const RUN_ICONS = {
   running: "M12 2a10 10 0 1 0 10 10h-3a7 7 0 1 1-7-7V2Z",
@@ -34,12 +56,17 @@ async function api(path, body) {
   return payload;
 }
 
+const calm = matchMedia("(prefers-reduced-motion: reduce)");
+
 function toast(message, isError = false) {
   const element = document.createElement("div");
   element.className = "toast" + (isError ? " error" : "");
   element.textContent = message;
   $("#toast-region").append(element);
-  setTimeout(() => element.remove(), isError ? 9000 : 4000);
+  setTimeout(() => {
+    element.classList.add("is-leaving");
+    setTimeout(() => element.remove(), calm.matches ? 0 : 220);
+  }, isError ? 9000 : 4000);
 }
 
 async function act(path, body, success) {
@@ -55,11 +82,17 @@ async function act(path, body, success) {
 }
 
 function showView(name) {
+  const changed = view !== name;
   view = name;
   $("#home-view").hidden = name !== "home";
   $("#settings-view").hidden = name !== "settings";
   $("#settings-button").hidden = name === "settings";
   window.scrollTo(0, 0);
+  if (!changed) return;
+  const shown = $(name === "home" ? "#home-view" : "#settings-view");
+  shown.classList.remove("is-entering");
+  void shown.offsetWidth;  // Restart the entrance.
+  shown.classList.add("is-entering");
 }
 
 function escapeHtml(value) {
@@ -88,7 +121,8 @@ function longDate(day) {
 function renderDateChoices() {
   const form = $("#advanced-form");
   for (const pair of $$(".date-pair")) pair.hidden = form[pair.dataset.mode].value !== "range";
-  const today = new Date().toLocaleDateString("en-CA");
+  // The mission's date, the same one the main screen uses.
+  const today = state?.today || new Date().toLocaleDateString("en-CA");
   const fixedReport = form.report_mode.value === "range";
   const start = fixedReport ? form.report_start.value : shifted(today, Number(form.lookback_days.value) || 0);
   const end = fixedReport ? form.report_end.value : today;
@@ -97,13 +131,33 @@ function renderDateChoices() {
   const first = fixedCompare ? form.compare_start.value : start && shifted(start, days);
   const last = fixedCompare ? form.compare_end.value : end && shifted(end, days);
   $("#dates-preview").textContent = start && end && first && last
-    ? `Reports will cover ${longDate(start)} – ${longDate(end)}, compared with ${longDate(first)} – ${longDate(last)}.`
+    ? `${longDate(start)} – ${longDate(end)}, compared with ${longDate(first)} – ${longDate(last)}`
     : "Choose both dates.";
 }
 
 function daysAgo(iso) {
   const days = Math.floor((Date.now() - new Date(iso)) / DAY);
   return days <= 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
+}
+
+function capital(text) {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+// Numbers count up once when a run finishes.
+function countUp(element) {
+  const target = Number(element.dataset.count);
+  if (calm.matches || !Number.isFinite(target)) {
+    element.textContent = element.dataset.count;
+    return;
+  }
+  const start = performance.now();
+  const step = (now) => {
+    const t = Math.min(1, (now - start) / 700);
+    element.textContent = Math.round(target * (1 - Math.pow(1 - t, 3))).toLocaleString();
+    if (t < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 }
 
 function folderName(path) {
@@ -118,9 +172,10 @@ function fillForms() {
   const s = state.settings;
   const mission = $("#mission-form");
   mission.mission.value = state.configured ? s.mission : "";
-  $("#timezone-select").innerHTML = state.timezones.map((zone) => `<option>${zone}</option>`).join("");
+  // "Automatic" follows this computer's time zone; picking a zone keeps that one.
+  $("#timezone-select").innerHTML = zoneOptions();
   // Until the mission is saved, guess the time zone from this computer.
-  mission.timezone.value = state.configured ? s.timezones.default : state.suggested_timezone;
+  mission.timezone.value = s.timezone_auto ? "auto" : s.timezones.default;
   const account = $("#account-form");
   account.email.value = state.account.email;
   account.username.value = state.account.username;
@@ -132,6 +187,17 @@ function fillForms() {
   advanced.show_browser.checked = s.show_browser;
   $("#keep-input").value = s.keep_reports;
   formsFilled = true;
+  loadMissions();
+}
+
+// Type-ahead for the mission name, from the list Tableau's Mission filter shows.
+async function loadMissions() {
+  try {
+    const { missions } = await api("/api/missions");
+    $("#mission-options").innerHTML = missions.map((name) => `<option value="${escapeHtml(name)}"></option>`).join("");
+  } catch {
+    // Without the list, the field still takes any name.
+  }
 }
 
 function renderSettings(ready) {
@@ -141,13 +207,17 @@ function renderSettings(ready) {
   $("#settings-head").hidden = setup;
   $("#setup-alt").hidden = !setup;
   $("#advanced").hidden = setup;
+  // Setup only needs the Church account: the mission comes from Tableau, the time zone from this PC.
+  $("#mission-form").hidden = setup;
+  $("#account-step").hidden = setup;
+  $("#mission-help").textContent = state.configured ? "Read from Tableau. Change it only if it's wrong." : "Found in Tableau on your first run.";
   $("#account-step").textContent = state.account.saved ? "✓" : "1";
   $("#account-step").classList.toggle("is-done", state.account.saved);
   $("#mission-step").textContent = state.configured ? "✓" : "2";
   $("#mission-step").classList.toggle("is-done", state.configured);
-  $("#account-note").textContent = state.account.saved ? "Saved on this computer" : "";
-  $("#account-password").placeholder = state.account.saved ? "Saved · leave blank to keep it" : "";
-  $("#mission-note").textContent = state.configured ? `Saved · ${state.settings.timezones.default}` : "";
+  $("#account-note").textContent = state.account.saved ? "Saved" : "";
+  $("#account-password").placeholder = state.account.saved ? "Saved" : "";
+  $("#mission-note").textContent = state.configured ? "Saved" : "";
 }
 
 function renderRunCard(ready, running) {
@@ -157,7 +227,7 @@ function renderRunCard(ready, running) {
   $("#run-eyebrow").textContent = !ready ? "Almost there" : last ? `Last run ${shortDate(last.generated_utc)} · ${daysAgo(last.generated_utc)}` : "First run";
   $("#run-title").textContent = !ready ? "Finish setup to make reports" : fixedDates ? "Make reports for these dates" : due ? "Make this week's reports" : "This week's reports are done";
   $("#run-lede").textContent = !ready
-    ? "Add your Church account and mission in Settings. It takes a minute."
+    ? "Add your Church account in Settings. It takes a minute."
     : "Signs in to Tableau, downloads your referrals, and makes every dashboard and district summary.";
   const button = $("#run-button");
   button.disabled = running;
@@ -183,10 +253,12 @@ function renderDrive(running) {
   $("#drive-row").hidden = !drive.available;
   $("#drive-name").textContent = drive.connecting ? "Finish in your browser…" : drive.connected ? drive.folder_name : "Not connected";
   const note = $("#drive-note");
-  note.textContent = drive.error || (drive.connecting ? "Sign in and choose a folder." : drive.connected ? "Each run uploads here." : "Sign in and choose a folder, and each run uploads there.");
+  note.textContent = drive.error || (drive.connecting ? "Sign in, pick a folder, then click Insert." : drive.connected ? "Each run uploads here." : "Pick a folder in your Drive or a shared drive.");
   note.className = drive.error ? "is-error" : "";
   $("#drive-connect").textContent = drive.connected ? "Change folder" : "Connect Google Drive";
-  $("#drive-connect").disabled = drive.connecting || running;
+  $("#drive-connect").hidden = drive.connecting;
+  $("#drive-connect").disabled = running;
+  $("#drive-cancel").hidden = !drive.connecting;
   $("#drive-disconnect").hidden = !drive.connected;
   $("#drive-disconnect").disabled = running;
   $("#drive-open").hidden = !drive.connected;
@@ -198,35 +270,66 @@ function elapsed(run) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
+function renderSteps(steps) {
+  const list = $("#work-steps");
+  const rows = steps.map((step) => ({
+    state: step.state,
+    html: `<span>${STEP_ICONS[step.state]}</span>
+      <div><strong>${escapeHtml(step.label)}</strong><small>${escapeHtml(step.detail || { pending: "Waiting", active: "In progress", done: "Done", failed: "Failed" }[step.state])}</small></div>`,
+  }));
+  if (list.children.length !== rows.length) list.innerHTML = rows.map(() => "<li></li>").join("");
+  // Only a step that changed is redrawn, so spinners keep turning and each check pops once.
+  rows.forEach((row, index) => {
+    const item = list.children[index];
+    if (item.dataset.html === row.html) return;
+    item.dataset.html = row.html;
+    item.className = `is-${row.state}`;
+    item.innerHTML = row.html;
+  });
+}
+
 function renderWork(run) {
+  const wrap = $("#work-wrap");
+  if (!run) {
+    wrap.hidden = true;
+    wrap.classList.remove("is-open");
+    return;
+  }
+  if (wrap.hidden) {
+    // Unhide first, then open on a later frame so the card slides the page down instead of jumping.
+    wrap.hidden = false;
+    requestAnimationFrame(() => requestAnimationFrame(() => wrap.classList.add("is-open")));
+  }
   const panel = $("#work");
-  panel.hidden = !run;
-  if (!run) return;
   const waiting = run.status === "running" && Boolean(run.attention);
   panel.className = `card work is-${run.status}` + (waiting ? " is-attention" : "");
-  $("#work .work-icon path").setAttribute("d", RUN_ICONS[run.status]);
+  const icon = $("#work .work-icon path");
+  if (icon.getAttribute("d") !== RUN_ICONS[run.status]) icon.setAttribute("d", RUN_ICONS[run.status]);
   $("#work-title").textContent = waiting ? "Waiting for you" : { running: "Making reports", done: "Reports are ready", failed: "The run stopped" }[run.status];
   $("#work-message").textContent = run.status === "failed" ? run.error : waiting ? run.attention : run.status === "done" ? `Finished in ${elapsed(run)}` : run.message;
   $("#work-time").textContent = elapsed(run);
   $("#work-bar").style.width = `${run.status === "running" ? Math.max(run.percent, 2) : 100}%`;
-  $("#work-steps").innerHTML = run.steps.map((step) => `
-    <li class="is-${step.state}"><span>${STEP_ICONS[step.state]}</span>
-      <div><strong>${escapeHtml(step.label)}</strong><small>${escapeHtml(step.detail || { pending: "Waiting", active: "In progress", done: "Done", failed: "Failed" }[step.state])}</small></div></li>`).join("");
+  renderSteps(run.steps);
 
+  const key = `${run.id}:${run.status}`;
   const result = $("#work-result");
   result.hidden = run.status !== "done";
-  if (run.status === "done") {
+  if (run.status === "done" && result.dataset.key !== key) {
+    result.dataset.key = key;
     const r = run.result;
     result.innerHTML = `
-      <div class="stat"><strong>${r.referrals}</strong><small>Referrals</small></div>
-      <div class="stat"><strong>${r.dashboards}</strong><small>Dashboards</small></div>
-      <div class="stat"><strong>${r.summaries}</strong><small>District summaries</small></div>
+      <div class="stat"><strong data-count="${Number(r.referrals) || 0}">0</strong><small>Referrals</small></div>
+      <div class="stat"><strong data-count="${Number(r.dashboards) || 0}">0</strong><small>Dashboards</small></div>
+      <div class="stat"><strong data-count="${Number(r.summaries) || 0}">0</strong><small>District summaries</small></div>
       <div class="stat"><strong class="small">${r.compared_with ? escapeHtml(r.compared_with) : "—"}</strong><small>${r.compared_with ? "Compared with" : "Comparison dates not in this file"}</small></div>` +
       (r.removed ? `<p class="result-note">Removed ${r.removed} older report set${r.removed === 1 ? "" : "s"} to save space.</p>` : "") +
       (r.drive_error ? `<p class="result-note is-error">Couldn't upload to Google Drive: ${escapeHtml(r.drive_error)} Your reports are still on this computer.</p>` : "");
+    result.querySelectorAll("[data-count]").forEach(countUp);
   }
   const actions = $("#work-actions");
   actions.hidden = run.status === "running";
+  if (actions.dataset.key === key) return;
+  actions.dataset.key = key;
   if (run.status === "done") {
     actions.innerHTML = `<button class="button button-primary" data-open="${escapeHtml(run.result.folder)}">Open reports</button>` +
       (run.result.drive_link ? `<button class="button" data-open="${escapeHtml(run.result.drive_link)}">Open in Drive</button>` : "");
@@ -234,27 +337,36 @@ function renderWork(run) {
     actions.innerHTML = `<button class="button button-primary" data-run="${escapeHtml(run.source)}">Try again</button>` +
       (run.source === "tableau" ? `<button class="button" data-run="tableau" data-watch="1">Try again and show the browser</button>` : "") +
       (/mission/i.test(run.error) ? `<button class="button" data-view="settings">Fix mission name</button>` : "");
+  } else {
+    actions.innerHTML = "";
   }
 }
 
+const FOLDER_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h7l2 2h9v12H3V5Z"/></svg>';
+const ARROW_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.3 5.3 7.9 6.7l5.3 5.3-5.3 5.3 1.4 1.4 6.7-6.7-6.7-6.7Z"/></svg>';
+
+// One line per report: the dates it covers and when it was made. Click anywhere on it to open it.
 function renderReports() {
   const list = $("#report-list");
-  if (!state.recent.length) {
-    list.innerHTML = `<p class="empty-state">No reports yet. Your first run will show up here.</p>`;
-    return;
+  const html = !state.recent.length ? `<p class="empty-state">No reports yet.</p>` : state.recent.map((run, index) => `
+    <button class="report-row" data-open="${escapeHtml(run.folder)}" title="${escapeHtml(run.folder)}">
+      <span class="report-icon">${FOLDER_ICON}</span>
+      <span class="report-main"><strong>${escapeHtml(run.period || dateTime(run.generated_utc))}</strong>
+        <span>${capital(daysAgo(run.generated_utc))}</span></span>
+      ${index === 0 ? '<span class="badge">Latest</span>' : ""}
+      <span class="report-open">Open ${ARROW_ICON}</span>
+    </button>`).join("");
+  // Redrawing on every poll would drop hover and restart animations.
+  if (list.dataset.html !== html) {
+    list.innerHTML = html;
+    list.dataset.html = html;
   }
-  list.innerHTML = state.recent.map((run) => `
-    <div class="report-row">
-      <div class="report-main"><strong>${dateTime(run.generated_utc)}</strong>
-        <span>${run.period ? `${escapeHtml(run.period)} · ` : ""}${run.referrals ?? "?"} referrals · ${run.images ?? "?"} pictures · ${run.compared_with ? `vs ${escapeHtml(run.compared_with)}` : "no comparison"}</span></div>
-      <button class="button" data-open="${escapeHtml(run.folder)}">Open</button>
-    </div>`).join("");
 }
 
 function render() {
   const run = state.run;
   const running = run?.status === "running";
-  const ready = state.configured && state.account.saved;
+  const ready = state.account.saved;
   const waiting = running && Boolean(run.attention);
   // Setup comes first; once it is finished, go straight to the run screen.
   if (view === null) showView(ready ? "home" : "settings");
@@ -268,7 +380,6 @@ function render() {
   pill.className = "status-pill " + (waiting ? "is-warn" : running ? "is-busy" : run?.status === "failed" ? "is-error" : ready ? "is-ok" : "is-warn");
   $("#status-text").textContent = waiting ? "Needs you" : running ? "Running" : run?.status === "failed" ? "Last run stopped" : ready ? "Ready" : "Setup needed";
   $("#brand-mission").textContent = state.configured ? state.settings.mission : "Mission reports";
-  $("#footer-version").textContent = `Referral Dash ${state.version}`;
   renderSettings(ready);
   renderRunCard(ready, running);
   renderDrive(running);
@@ -293,7 +404,7 @@ document.addEventListener("click", async (event) => {
   if (target.dataset.view) showView(target.dataset.view);
   if (target.dataset.open) act("/api/open", { target: target.dataset.open });
   if (target.dataset.run) {
-    const ready = state.configured && state.account.saved;
+    const ready = state.account.saved;
     if (target.dataset.run !== "sample" && !ready) return showView("settings");
     showView("home");
     target.disabled = true;
@@ -303,7 +414,21 @@ document.addEventListener("click", async (event) => {
 });
 
 $("#advanced-form").addEventListener("input", renderDateChoices);
+// Typing a number of days picks that option.
+$$(".segment .days-input").forEach((field) => field.addEventListener("focus", () => {
+  const radio = field.closest(".segment").querySelector('input[type="radio"]');
+  if (radio.checked) return;
+  radio.checked = true;
+  radio.form.classList.add("is-dirty");
+  renderDateChoices();
+}));
+// Save buttons appear once something has changed.
+for (const form of [$("#account-form"), $("#mission-form"), $("#advanced-form")]) {
+  form.addEventListener("input", () => form.classList.add("is-dirty"));
+  form.addEventListener("change", () => form.classList.add("is-dirty"));
+}
 $("#drive-connect").addEventListener("click", () => act("/api/drive/connect", {}));
+$("#drive-cancel").addEventListener("click", () => act("/api/drive/cancel", {}));
 $("#drive-disconnect").addEventListener("click", () => act("/api/drive/disconnect", {}, "Google Drive disconnected. Nothing was removed from your Drive."));
 $("#drive-open").addEventListener("click", () => act("/api/open", { target: state.drive.folder_link }));
 $("#output-change").addEventListener("click", () => act("/api/output-folder", {}));
@@ -325,8 +450,11 @@ $("#mission-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.target;
   // Zone overrides live under Advanced; keep them when the mission is saved.
-  const body = { mission: form.mission.value, timezones: { ...overrides(), default: form.timezone.value } };
-  await act("/api/settings", body, "Mission saved.");
+  const auto = form.timezone.value === "auto";
+  const body = { timezone_auto: auto, timezones: { ...overrides(), default: auto ? state.settings.timezones.default : form.timezone.value } };
+  // Blank means "find it in Tableau", so only a typed name is sent.
+  if (form.mission.value.trim()) body.mission = form.mission.value;
+  if (await act("/api/settings", body, "Mission saved.")) form.classList.remove("is-dirty");
 });
 
 $("#account-form").addEventListener("submit", async (event) => {
@@ -334,6 +462,7 @@ $("#account-form").addEventListener("submit", async (event) => {
   const form = event.target;
   if (await act("/api/account", { email: form.email.value, username: form.username.value, password: form.password.value }, "Church account saved.")) {
     form.password.value = "";
+    form.classList.remove("is-dirty");
   }
 });
 
@@ -344,8 +473,8 @@ $("#advanced-form").addEventListener("submit", async (event) => {
   for (const line of form.overrides.value.split("\n")) {
     if (!line.trim()) continue;
     const at = line.lastIndexOf("=");
-    if (at < 1) return toast("Zone lines look like: Hawaii = HST", true);
-    timezones[line.slice(0, at).trim()] = line.slice(at + 1).trim().toUpperCase();
+    if (at < 1) return toast("Zone lines look like: Hawaii = Pacific/Honolulu", true);
+    timezones[line.slice(0, at).trim()] = line.slice(at + 1).trim();
   }
   const body = { timezones, report_mode: form.report_mode.value, report_start: form.report_start.value, report_end: form.report_end.value,
                  compare_mode: form.compare_mode.value, compare_days: form.compare_days.value,
@@ -353,7 +482,7 @@ $("#advanced-form").addEventListener("submit", async (event) => {
                  lookback_days: form.lookback_days.value, start_time: form.start_time.value, cutoff_time: form.cutoff_time.value,
                  lightning: form.lightning.value, pepper: form.pepper.value, tableau_view_url: form.tableau_view_url.value,
                  show_browser: form.show_browser.checked };
-  await act("/api/settings", body, "Advanced settings saved.");
+  if (await act("/api/settings", body, "Advanced settings saved.")) form.classList.remove("is-dirty");
 });
 
 refresh();

@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from urllib.parse import urlsplit
 
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -40,6 +40,14 @@ def tableau_site_uri(endpoint: str | None) -> str:
 
 
 def _login_state(driver):
+    try:
+        return _read_login_state(driver)
+    except StaleElementReferenceException:
+        # The sign-in page redrew while it was being read; look again on the next poll.
+        return False
+
+
+def _read_login_state(driver):
     for field_id in ("email", "site-uri", "siteURI", "username-input", "password-input"):
         for field in driver.find_elements(By.ID, field_id):
             if field.is_displayed() and field.is_enabled():

@@ -9,12 +9,12 @@ FIRST TIME (about 2 minutes)
 1. Right-click the ZIP > Extract All. Open the new folder.
 2. Double-click "Referral Dash.exe". The app opens in its own window.
    (Windows may ask you to confirm the first time: More info > Run anyway.)
-3. The app asks for two things:
+3. The app asks for one thing:
    - Church account: your missionary email, Church username and password.
      They are saved in Windows Credential Manager on this computer only.
-   - Mission: your mission name the way Tableau lists it (for example
-     "Tennessee Knoxville Mission"). The time zone is filled in from this
-     computer; change it if your mission is somewhere else.
+   That's all setup asks for. The first run finds your mission in Tableau, and
+   the time zone comes from this computer. Both can be changed in Settings >
+   Mission.
    Want a preview first? Click "Try sample data".
 
 EVERY WEEK
@@ -40,13 +40,18 @@ Each run makes a folder named for its dates, like
 - Reports are saved in Documents\Referral Dash reports. Click "Change" on the
   main screen to save them somewhere else. To share them, pick a folder that
   Google Drive for desktop, OneDrive or a shared drive already syncs.
-- Or click "Connect Google Drive", sign in, and choose a folder. Each run then
-  uploads there too. Older uploads move to the Drive trash, using the same
-  number you set for keeping reports. The app can only see that folder and what
-  it put there, so nothing else in your Drive can be changed.
-- Only the newest 8 report sets are kept; older ones are deleted after each
-  run so the folder stays small. Type a different number (0 keeps them all) on the
-  main screen. Deleting old reports never affects the comparison.
+- Or click "Connect Google Drive", sign in, and choose a folder in your Drive
+  or a shared drive. (Google's chooser calls its button "Insert".) Each run
+  then uploads there too: the five folders (Areas, Districts, Zones, Mission,
+  District Summaries) go straight into that folder, and each run replaces the
+  last copy, moving the previous one to the Drive trash. In a shared drive,
+  moving files to the trash needs Content manager access; without it, the old
+  copy stays. The app can only see that folder and what it put there, so
+  nothing else in your Drive can be changed.
+- On this computer, the newest 8 report sets are kept; older ones are deleted
+  after each run so the folder stays small. Type a different number (0 keeps
+  them all) on the main screen. Deleting old reports never affects the
+  comparison.
 
 IF SOMETHING GOES WRONG
 - "Tableau has no mission named ...": it suggests the closest name. Click
@@ -59,5 +64,6 @@ IF SOMETHING GOES WRONG
 - Already downloaded a CSV yourself? Click "Use a CSV I downloaded". To get
   the change arrows, choose a date range in Settings > Advanced, and make sure
   your CSV also covers the dates you compare with.
-- Settings > Advanced has the rarely needed options (report dates and comparison,
-  response-time hours, icons, zones in another time zone).
+- Settings > Advanced has the rarely needed options: report dates and
+  comparison, the speed goal (lightning) and find goal (fire), morning and
+  night hours, and zones in another time zone.

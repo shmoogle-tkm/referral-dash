@@ -16,7 +16,16 @@ PST = ZoneInfo("America/Los_Angeles")
 AKST = ZoneInfo("America/Anchorage")
 HST = ZoneInfo("Pacific/Honolulu")
 
-TZ_LOOKUP = {
+class _Zones(dict):
+    """Any IANA zone name ("America/Lima"), plus the short names older settings used ("EST")."""
+
+    def __missing__(self, key):
+        zone = ZoneInfo(key)
+        self[key] = zone
+        return zone
+
+
+TZ_LOOKUP = _Zones({
     "UTC": UTC,
     "EST": EST,
     "CST": CST,
@@ -25,7 +34,7 @@ TZ_LOOKUP = {
     "PST": PST,
     "AKST": AKST,
     "HST": HST,
-}
+})
 
 DATE_FORMAT = "%m/%d/%Y %I:%M:%S %p"
 

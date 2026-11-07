@@ -141,13 +141,35 @@ class ReportTests(Isolated):
                     self.assertLessEqual(abs(box[0] + (bounds[0] + bounds[2]) / 2 - center[0]), 1)
                     self.assertLessEqual(abs(box[1] + (bounds[1] + bounds[3]) / 2 - center[1]), 1)
 
-    def test_many_unattempted_referrals_extend_image(self):
+    def test_a_long_unattempted_list_stops_growing_after_twenty_names(self):
+        heights = {}
         with tempfile.TemporaryDirectory() as folder:
-            image = Path(folder) / "many.png"
-            people = [{"name": f"Example Person {i}", "date": "10/01/2026 02:00:00 PM", "area": "Sample Area"} for i in range(36)]
-            engine.DashboardTemplate().buildImage("Fictional sample", None, 0, 36, 0, 0, 0, people, image)
-            with Image.open(image) as value:
-                self.assertGreaterEqual(value.height, 1450)
+            for count in (8, 21, 36, 200):
+                image = Path(folder) / f"{count}.png"
+                people = [{"name": f"Example Person {i}", "date": "10/01/2026 02:00:00 PM", "area": "Sample Area"} for i in range(count)]
+                engine.DashboardTemplate().buildImage("Fictional sample", None, 0, count, 0, 0, 0, people, image)
+                with Image.open(image) as value:
+                    heights[count] = value.height
+        self.assertGreater(heights[21], heights[8])  # More rows, up to the cap.
+        self.assertEqual(heights[21], heights[36])  # Past 20 names, only "+ N more" changes.
+        self.assertEqual(heights[36], heights[200])
+
+    def test_the_longest_waiting_are_listed_first(self):
+        from referral_dash import template
+        drawn = []
+        real = template.ImageDraw.ImageDraw.text
+
+        def record(draw, xy, text, *args, **kwargs):
+            drawn.append(text)
+            return real(draw, xy, text, *args, **kwargs)
+        people = [{"name": f"Waited {day}", "date": f"10/{day:02d}/2026 02:00:00 PM", "area": "Sample Area"} for day in range(30, 0, -1)]
+        with tempfile.TemporaryDirectory() as folder, patch.object(template.ImageDraw.ImageDraw, "text", record):
+            engine.DashboardTemplate().buildImage("Fictional sample", None, 0, 30, 0, 0, 0, people, Path(folder) / "x.png")
+        names = [t for t in drawn if t.startswith("Waited ")]
+        self.assertEqual(names[0], "Waited 1")
+        self.assertEqual(len(names), 20)
+        self.assertIn("30 Unattempted Referrals", drawn)
+        self.assertIn("+ 10 more", drawn)
 
 
 class ComparisonTests(Isolated):
@@ -274,7 +296,7 @@ class ComparisonTests(Isolated):
 
 class SettingsTests(Isolated):
     def test_zone_override_is_case_insensitive(self):
-        values = validate_settings({**DEFAULTS, "timezones": {"default": "UTC", " NORTH ": "EST"}})
+        values = validate_settings({**DEFAULTS, "timezones": {"default": "UTC", " NORTH ": "america/new_york"}})
         row = {"Latest Zone Name": "North", "First Referral Event Date": "10/01/2026 10:00:00 AM",
                "First Contact Attempt Event Date": "10/01/2026 11:00:00 AM"}
         self.assertEqual(ReferralPerson(row, values).contact_speed, 30)
@@ -296,16 +318,32 @@ class SettingsTests(Isolated):
         settings.settings_path().write_text(json.dumps(old))
         loaded = settings.load_settings()
         self.assertEqual((loaded["mission"], loaded["lookback_days"], loaded["keep_reports"]), ("Old Mission", 60, 8))
-        self.assertEqual(loaded["timezones"], {"default": "EST", "hawaii": "HST"})
+        # Older short names are kept as the zones they always meant.
+        self.assertEqual(loaded["timezones"], {"default": "America/New_York", "hawaii": "Pacific/Honolulu"})
         self.assertFalse({"drive_folder", "drive_folder_name", "tableau_sso_url"} & loaded.keys())
 
     def test_time_zone_guess_comes_from_this_computer(self):
         from referral_dash import settings
-        for offset, daylight, expected in ((18000, 1, "EST"), (21600, 1, "CST"), (25200, 1, "MST"),
-                                           (25200, 0, "MST_NO_DST"), (36000, 0, "HST"), (-3600, 1, "UTC")):
-            with self.subTest(offset=offset, daylight=daylight), \
+        # Windows names the zone exactly, anywhere in the world.
+        for reported, expected in (("America/Lima", "America/Lima"), ("Asia/Manila", "Asia/Manila"), ("europe/london", "Europe/London")):
+            with self.subTest(reported=reported), patch.object(settings, "_windows_zone", return_value=reported):
+                self.assertEqual(settings.suggested_timezone(), expected)
+        # Without it, the clock's offset still finds the US zones.
+        for offset, daylight, expected in ((18000, 1, "America/New_York"), (21600, 1, "America/Chicago"), (25200, 1, "America/Denver"),
+                                           (25200, 0, "America/Phoenix"), (36000, 0, "Pacific/Honolulu"), (-3600, 1, "UTC")):
+            with self.subTest(offset=offset, daylight=daylight), patch.object(settings, "_windows_zone", return_value=None), \
                     patch.object(settings.time, "timezone", offset), patch.object(settings.time, "daylight", daylight):
                 self.assertEqual(settings.suggested_timezone(), expected)
+
+    def test_world_zones_are_supported_and_old_names_still_work(self):
+        from referral_dash import settings
+        from referral_dash.group import TZ_LOOKUP
+        for zone in ("America/Mexico_City", "America/Sao_Paulo", "Asia/Manila", "Africa/Lagos", "Europe/London", "Pacific/Auckland"):
+            self.assertIn(zone, settings.TIMEZONES)
+            self.assertEqual(validate_settings({**DEFAULTS, "timezones": {"default": zone}})["timezones"]["default"], zone)
+            self.assertEqual(str(TZ_LOOKUP[zone]), zone)
+        self.assertEqual(str(TZ_LOOKUP["EST"]), "America/New_York")
+        self.assertEqual(settings.zone_name("mst_no_dst"), "America/Phoenix")
 
     def test_version_one_settings_beside_the_app_are_carried_forward(self):
         from referral_dash import settings
@@ -338,7 +376,7 @@ class TableauTests(unittest.TestCase):
         from referral_dash.tableau.session import VerificationNeeded
         opened, asked = [], []
 
-        def fake_download(driver, settings, credentials, work, destination, period, progress, verification):
+        def fake_download(driver, settings, credentials, work, destination, period, progress, verification, found=None):
             verification()  # The Church sign-in shows an authenticator prompt.
             return "export.csv"
         with tempfile.TemporaryDirectory() as folder, \
@@ -453,7 +491,7 @@ class FakeGoogle:
         self.items = {"picked": {"name": "Weekly Dashboards", "mimeType": "application/vnd.google-apps.folder",
                                  "capabilities": {"canAddChildren": True}, "parents": []}}
         self.token_requests, self.fail_uploads, self.next_id, self.lock = [], 0, 0, threading.Lock()
-        self.flaky, self.refused_token = 0, False
+        self.flaky, self.refused_token, self.refuse_trash = 0, False, False
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, format, *args):
@@ -507,6 +545,8 @@ class FakeGoogle:
                 item = fake.items.get(self.path.split("/files/")[-1].split("?")[0])
                 if item is None:
                     return self.reply(404, {"error": {"message": "not found"}})
+                if fake.refuse_trash:
+                    return self.reply(403, {"error": {"message": "The user does not have sufficient permissions for this file."}})
                 item.update(body)
                 return self.reply(200, {"id": "ok"})
 
@@ -589,6 +629,14 @@ class DriveTests(Isolated):
             self.drive.connect(self.browser(code="abc"))
         self.assertEqual(self.vault, {})
 
+    def test_cancelling_stops_waiting_for_the_browser(self):
+        import threading
+        cancelled = threading.Event()
+        cancelled.set()
+        with self.assertRaisesRegex(self.drive.DriveError, "cancelled"):
+            self.drive.connect(lambda url: None, cancelled=cancelled)
+        self.assertEqual(self.vault, {})
+
     def test_a_wrong_state_is_ignored(self):
         with patch.object(self.drive, "SIGN_IN_SECONDS", 2):
             def forged(url):
@@ -614,21 +662,23 @@ class DriveTests(Isolated):
         with self.assertRaisesRegex(self.drive.DriveError, "can't add files"):
             self.connect()
 
-    def test_upload_recreates_the_report_set_and_skips_the_summary_file(self):
+    def live_folders(self):
+        return {k: v for k, v in self.google.items.items()
+                if v.get("mimeType") == self.drive.FOLDER_TYPE and k != "picked" and not v.get("trashed")}
+
+    def test_the_five_folders_go_straight_into_the_chosen_folder(self):
         self.connect()
         calls = []
         with tempfile.TemporaryDirectory() as folder:
             link = self.drive.upload_run(self.make_run(folder), "picked", lambda m, done=None, total=None: calls.append((done, total)))
-        folders = {k: v for k, v in self.google.items.items() if v["mimeType" if "mimeType" in v else "name"] == self.drive.FOLDER_TYPE and k != "picked"}
-        names = {v["name"] for v in folders.values()}
-        self.assertEqual(names, {"Referral Reports - Oct 1 to Oct 8, 2026", "1. Areas", "5. District Summaries"})
+        folders = self.live_folders()
+        self.assertEqual({v["name"] for v in folders.values()}, {"1. Areas", "5. District Summaries"})
+        self.assertTrue(all(v["parents"] == ["picked"] for v in folders.values()))
         files = [v for v in self.google.items.values() if "size" in v]
         self.assertEqual(len(files), 5)
         self.assertNotIn("run-summary.json", {f["name"] for f in files})
         self.assertEqual(calls[-1], (5, 5))
-        root = next(k for k, v in folders.items() if v["name"].startswith("Referral Reports"))
-        self.assertEqual(self.google.items[root]["parents"], ["picked"])
-        self.assertTrue(link.endswith(root))
+        self.assertEqual(link, self.drive.folder_link("picked"))
 
     def test_temporary_google_errors_are_retried(self):
         self.connect()
@@ -651,39 +701,50 @@ class DriveTests(Isolated):
             self.assertEqual(self.drive._send("POST", "https://example.test/x")["id"], "ok")
         self.assertEqual(len(attempts), 3)
 
-    def test_failed_upload_puts_the_partial_set_in_the_trash(self):
+    def test_failed_upload_trashes_the_partial_copy_and_keeps_the_last_one(self):
         self.connect()
-        self.google.fail_uploads = 1
         with tempfile.TemporaryDirectory() as folder:
+            self.drive.upload_run(self.make_run(folder, "Week 1"), "picked")
+            last = set(self.live_folders())
+            self.google.fail_uploads = 1
             with self.assertRaisesRegex(self.drive.DriveError, "quota"):
-                self.drive.upload_run(self.make_run(folder), "picked")
-        root = next(v for v in self.google.items.values() if v["name"].startswith("Referral Reports"))
-        self.assertTrue(root["trashed"])
-        self.assertEqual(self.drive.prune_uploads("picked", 1), 0)  # It was never recorded as an upload.
+                self.drive.upload_run(self.make_run(folder, "Week 2"), "picked")
+        self.assertEqual(set(self.live_folders()), last)  # The last good copy is still there.
+        self.assertEqual(self.drive.leftover_uploads("picked"), 0)
 
-    def test_only_this_apps_oldest_uploads_go_to_the_trash(self):
+    def test_each_upload_replaces_the_last_copy_and_nothing_else(self):
         self.connect()
         self.google.items["theirs"] = {"name": "Someone's notes", "mimeType": self.drive.FOLDER_TYPE, "parents": ["picked"]}
         with tempfile.TemporaryDirectory() as folder:
-            for week in range(1, 5):
-                self.drive.upload_run(self.make_run(folder, f"Referral Reports - Week {week}"), "picked")
-            self.assertEqual(self.drive.prune_uploads("picked", 0), 0)  # 0 keeps them all.
-            self.assertEqual(self.drive.prune_uploads("picked", 2), 2)
-            self.assertEqual(self.drive.prune_uploads("picked", 2), 0)
-        state = {v["name"]: v.get("trashed", False) for v in self.google.items.values() if v["name"].startswith("Referral Reports")}
-        self.assertEqual(state, {"Referral Reports - Week 1": True, "Referral Reports - Week 2": True,
-                                 "Referral Reports - Week 3": False, "Referral Reports - Week 4": False})
+            self.drive.upload_run(self.make_run(folder, "Week 1"), "picked")
+            first = set(self.live_folders()) - {"theirs"}
+            self.drive.upload_run(self.make_run(folder, "Week 2"), "picked")
+        second = set(self.live_folders()) - {"theirs"}
+        self.assertTrue(first and second and not first & second)
+        self.assertTrue(all(self.google.items[k]["trashed"] for k in first))
         self.assertNotIn("trashed", self.google.items["theirs"])
 
-    def test_a_set_deleted_by_hand_is_forgotten_and_a_refused_one_is_retried(self):
+    def test_sets_from_the_older_dated_layout_are_replaced_too(self):
+        self.connect()
+        self.google.items["oldset"] = {"name": "Referral Reports - Oct 1 to Oct 8, 2026", "mimeType": self.drive.FOLDER_TYPE, "parents": ["picked"]}
+        (Path(self.home.name) / "drive-uploads.json").write_text(json.dumps({"picked": [{"id": "oldset", "name": "Referral Reports - Oct 1 to Oct 8, 2026"}]}))
+        with tempfile.TemporaryDirectory() as folder:
+            self.drive.upload_run(self.make_run(folder), "picked")
+        self.assertTrue(self.google.items["oldset"]["trashed"])
+
+    def test_a_copy_deleted_by_hand_is_forgotten_and_a_refused_one_is_retried(self):
         self.connect()
         with tempfile.TemporaryDirectory() as folder:
-            for week in (1, 2, 3):
-                self.drive.upload_run(self.make_run(folder, f"Referral Reports - Week {week}"), "picked")
-        first = next(k for k, v in self.google.items.items() if v["name"].endswith("Week 1"))
-        del self.google.items[first]
-        self.assertEqual(self.drive.prune_uploads("picked", 2), 0)
-        self.assertEqual(len(json.loads((Path(self.home.name) / "drive-uploads.json").read_text())["picked"]), 2)
+            self.drive.upload_run(self.make_run(folder, "Week 1"), "picked")
+            gone = next(iter(self.live_folders()))
+            del self.google.items[gone]
+            self.google.refuse_trash = True
+            self.drive.upload_run(self.make_run(folder, "Week 2"), "picked")
+            self.assertEqual(self.drive.leftover_uploads("picked"), 1)  # One left, one deleted by hand.
+            self.google.refuse_trash = False
+            self.drive.upload_run(self.make_run(folder, "Week 3"), "picked")
+        self.assertEqual(self.drive.leftover_uploads("picked"), 0)
+        self.assertEqual(len(self.live_folders()), 2)  # Only the newest copy's two folders.
 
     def test_lost_connection_says_to_reconnect(self):
         self.connect()
@@ -701,6 +762,69 @@ class DriveTests(Isolated):
             self.assertFalse(self.drive.available())
             with self.assertRaisesRegex(self.drive.DriveError, "isn't set up"):
                 self.drive.connect(lambda url: None)
+
+
+class MissionListTests(unittest.TestCase):
+    def test_the_list_ships_and_includes_real_missions(self):
+        from referral_dash import missions
+        names = missions.load()
+        self.assertGreater(len(names), 400)
+        self.assertIn("Tennessee Knoxville Mission", names)
+        self.assertTrue(all(name.endswith("Mission") for name in names))
+        self.assertEqual(len(names), len(set(names)))
+
+    def test_accents_and_capitals_still_find_tableaus_spelling(self):
+        from referral_dash.tableau.dashboard import tableau_spelling
+        choices = ["(All)", "Mexico Mexico City East Mission", "Idaho Coeur d'Alene Mission", "Missouri St. Louis Mission"]
+        self.assertEqual(tableau_spelling(("México México City East Mission",), choices), ("Mexico Mexico City East Mission",))
+        self.assertEqual(tableau_spelling(("idaho coeur d’alene mission",), choices), ("Idaho Coeur d'Alene Mission",))
+        self.assertEqual(tableau_spelling(("Missouri St Louis Mission",), choices), ("Missouri St. Louis Mission",))
+        self.assertEqual(tableau_spelling(("Nowhere Mission",), choices), ("Nowhere Mission",))
+
+
+class TimeZoneTests(Isolated):
+    def test_a_new_install_follows_this_computer(self):
+        from referral_dash import settings
+        with patch.object(settings, "suggested_timezone", return_value="America/Lima"):
+            loaded = settings.load_settings()
+        self.assertTrue(loaded["timezone_auto"])
+        self.assertEqual(loaded["timezones"]["default"], "America/Lima")
+
+    def test_a_picked_zone_stays_even_on_another_computer(self):
+        from referral_dash import settings
+        settings.save_settings({**settings.load_settings(), "timezone_auto": False, "timezones": {"default": "Pacific/Honolulu"}})
+        with patch.object(settings, "suggested_timezone", return_value="America/New_York"):
+            self.assertEqual(settings.load_settings()["timezones"]["default"], "Pacific/Honolulu")
+
+    def test_older_settings_keep_a_chosen_zone_and_follow_the_computer_otherwise(self):
+        from referral_dash import settings
+        path = settings.settings_path()
+        older = {k: v for k, v in settings.DEFAULTS.items() if k != "timezone_auto"}
+        path.write_text(json.dumps({**older, "timezones": {"default": "PST"}}))
+        with patch.object(settings, "suggested_timezone", return_value="America/New_York"):
+            self.assertEqual(settings.load_settings()["timezones"]["default"], "America/Los_Angeles")
+            self.assertFalse(settings.load_settings()["timezone_auto"])
+        path.write_text(json.dumps({**older, "timezones": {"default": "EST"}}))
+        with patch.object(settings, "suggested_timezone", return_value="America/New_York"):
+            self.assertTrue(settings.load_settings()["timezone_auto"])
+        path.write_text(json.dumps(older))
+        with patch.object(settings, "suggested_timezone", return_value="America/New_York"):
+            self.assertEqual(settings.load_settings()["timezones"]["default"], "America/New_York")
+
+
+class MissionDetectionTests(unittest.TestCase):
+    def test_the_only_mission_tableau_shows_is_used(self):
+        from referral_dash.tableau.dashboard import choose_mission
+        self.assertEqual(choose_mission(["Tennessee Knoxville Mission"]), "Tennessee Knoxville Mission")
+
+    def test_several_missions_need_the_typed_one(self):
+        from referral_dash.tableau.dashboard import choose_mission
+        choices = ["Mexico Mexico City East Mission", "Tennessee Knoxville Mission"]
+        self.assertEqual(choose_mission(choices, "México Mexico City East Mission"), "Mexico Mexico City East Mission")
+        with self.assertRaisesRegex(RuntimeError, "can see 2 missions"):
+            choose_mission(choices)
+        with self.assertRaisesRegex(RuntimeError, "no missions"):
+            choose_mission([])
 
 
 class AppTests(Isolated):
@@ -741,9 +865,15 @@ class AppTests(Isolated):
         self.assertEqual(self.call("/api/run", {"source": "sample"}, token="")[0], 403)
 
     def test_real_runs_need_setup_first(self):
+        # The mission is found in Tableau, so a Tableau run only needs the Church account.
         status, payload = self.call("/api/run", {"source": "tableau"})
         self.assertEqual(status, 400)
-        self.assertIn("mission name", payload["error"])
+        self.assertIn("Church account", payload["error"])
+        # A CSV can't say which mission it is until a Tableau run has found it.
+        with patch.object(self.app.Controller, "ask_ui", return_value=None):
+            status, payload = self.call("/api/run", {"source": "file"})
+        self.assertEqual(status, 400)
+        self.assertIn("find your mission", payload["error"])
         self.call("/api/settings", {"mission": "Sample Mission"})
         status, payload = self.call("/api/run", {"source": "tableau"})
         self.assertIn("Church account", payload["error"])
@@ -799,13 +929,12 @@ class AppTests(Isolated):
     def test_runs_upload_after_saving_and_a_failure_keeps_the_reports(self):
         self.connected()
         with patch.object(self.app.drive, "upload_run", return_value=self.app.drive.folder_link("new1")) as upload, \
-                patch.object(self.app.drive, "prune_uploads", return_value=1) as prune, \
+                patch.object(self.app.drive, "leftover_uploads", return_value=0), \
                 patch.object(self.controller, "ask_ui", return_value=str(SAMPLE)):
             state = self.finish({"source": "file"})
         result = state["run"]["result"]
         self.assertEqual(result["drive_link"], self.app.drive.folder_link("new1"))
         self.assertEqual(upload.call_args.args[1], "folder1")
-        self.assertEqual(prune.call_args.args, ("folder1", 8))
         self.assertEqual(state["run"]["steps"][-1]["detail"], "Weekly")
         with patch.object(self.app.drive, "upload_run", side_effect=self.app.drive.DriveError("Drive said no.")), \
                 patch.object(self.controller, "ask_ui", return_value=str(SAMPLE)):
@@ -832,6 +961,43 @@ class AppTests(Isolated):
             self.assertEqual(self.call("/api/drive/disconnect", {})[0], 200)
         self.assertFalse(self.call("/api/state")[1]["drive"]["connected"])
 
+    def wait_for_drive(self):
+        import time
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            drive_state = self.call("/api/state")[1]["drive"]
+            if not drive_state["connecting"]:
+                return drive_state
+            time.sleep(0.02)
+        self.fail("Drive stayed in connecting.")
+
+    def test_cancel_clears_connecting_without_showing_an_error(self):
+        import threading
+        started = threading.Event()
+
+        def waits(open_browser=None, cancelled=None):
+            started.set()
+            cancelled.wait(10)
+            raise self.app.drive.DriveError("Google sign-in was cancelled.")
+        with patch.object(self.app.drive, "connect", side_effect=waits):
+            self.call("/api/drive/connect", {})
+            self.assertTrue(started.wait(5))
+            self.assertTrue(self.call("/api/state")[1]["drive"]["connecting"])
+            self.assertEqual(self.call("/api/drive/cancel", {})[0], 200)
+            drive_state = self.wait_for_drive()
+        self.assertEqual((drive_state["error"], drive_state["connected"]), ("", False))
+
+    def test_the_window_gets_the_mission_list(self):
+        status, payload = self.call("/api/missions")
+        self.assertEqual(status, 200)
+        self.assertIn("Tennessee Knoxville Mission", payload["missions"])
+
+    def test_the_window_starts_the_folder_picker(self):
+        with patch.object(self.app.drive, "connect", return_value={"id": "shared", "name": "Zone Reports"}):
+            self.assertEqual(self.call("/api/drive/connect", {})[0], 200)
+            drive_state = self.wait_for_drive()
+        self.assertEqual((drive_state["connected"], drive_state["folder_name"]), (True, "Zone Reports"))
+
     def test_only_drive_links_open_in_the_browser(self):
         with patch.object(self.app.webbrowser, "open") as opened, patch.object(self.app.os, "startfile", create=True) as started:
             self.call("/api/open", {"target": self.app.drive.folder_link("abc")})
@@ -845,7 +1011,7 @@ class AppTests(Isolated):
         save_settings({**load_settings(), "mission": "Sample Mission", "output_folder": self.output.name})
         seen = []
 
-        def download(settings, login, folder, period, progress, attention):
+        def download(settings, login, folder, period, progress, attention, found=None):
             seen.append(period)
             return SAMPLE
         with patch("referral_dash.tableau.download.download_dashboard", side_effect=download), \

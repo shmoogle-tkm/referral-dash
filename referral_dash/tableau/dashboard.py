@@ -4,6 +4,7 @@ Adapted from the Referral Care Data Hub; the mission filter comes from settings.
 from __future__ import annotations
 
 import difflib
+import time
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit, urlunsplit
 
@@ -12,6 +13,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
+from ..missions import fold
 from .wait import set_date_filter, view_signature, wait_for_view_update
 
 
@@ -31,6 +33,12 @@ def dashboard_filters(mission):
         ("Ad Group", ("(All)",)),
         ("Ad Topic old", ("(All)",)),
     )
+
+
+def tableau_spelling(names, choices):
+    """Tableau's own spelling of each name, when only accents, capitals or periods differ."""
+    by_fold = {fold(choice): choice for choice in choices}
+    return tuple(by_fold.get(fold(name), name) for name in names)
 
 
 def missing_mission_message(mission, choices):
@@ -119,8 +127,10 @@ def _set_quick_filter(driver, label, values, timeout):
     options = {row.text.strip(): row for row in rows}
     if "(All)" not in options:
         raise RuntimeError(f"Cannot recover Dashboard: {label} has no All selection.")
-    if label == "Mission" and not set(values) <= options.keys():
-        raise RuntimeError(missing_mission_message(values[0], options.keys()))
+    if label == "Mission":
+        values = tableau_spelling(values, options.keys())
+        if not set(values) <= options.keys():
+            raise RuntimeError(missing_mission_message(values[0], options.keys()))
     target = set(values)
     # Tableau's relevant-value domain can omit a source with no current rows.
     if label == "Finding Source":
@@ -157,6 +167,47 @@ def _set_quick_filter(driver, label, values, timeout):
         raise RuntimeError(f"Cannot close the recovered {label} filter menu.")
     backdrop[-1].click()
     WebDriverWait(driver, timeout).until(EC.invisibility_of_element_located((By.ID, menu_id)))
+
+
+def read_filter_choices(driver, label, timeout=30):
+    """Every choice a quick filter lists, read without changing it. Long lists scroll, so scroll them."""
+    group = _group(driver, label)
+    opener = group.find_element(By.CSS_SELECTOR, '[aria-haspopup="listbox"]')
+    menu_id = group.get_attribute("id") + "_menu"
+    opener.click()
+    try:
+        menu = WebDriverWait(driver, timeout).until(EC.visibility_of_element_located((By.ID, menu_id)))
+        WebDriverWait(driver, timeout).until(lambda d: any(
+            r.text.strip() == "(All)" for r in menu.find_elements(By.CSS_SELECTOR, '[role="checkbox"]')))
+        seen, quiet = set(), 0
+        while quiet < 3:
+            found = set(driver.execute_script(
+                "return Array.from(arguments[0].querySelectorAll('[role=\"checkbox\"]'), r => r.textContent.trim());", menu))
+            quiet = quiet + 1 if found <= seen else 0
+            seen |= found
+            driver.execute_script(
+                "for (const e of [arguments[0], ...arguments[0].querySelectorAll('*')])"
+                "  if (e.scrollHeight > e.clientHeight + 4) e.scrollTop += e.clientHeight * 0.8;", menu)
+            time.sleep(0.3)
+        return sorted(t for t in seen if t and t != "(All)")
+    finally:
+        # Close without applying anything: click the popup's own backdrop, as the recovery code does.
+        backdrop = _visible(driver, By.CSS_SELECTOR, ".tab-glass.clear-glass")
+        if backdrop:
+            backdrop[-1].click()
+            WebDriverWait(driver, timeout).until(EC.invisibility_of_element_located((By.ID, menu_id)))
+
+
+def choose_mission(choices, typed=""):
+    """The account's mission: the only one Tableau shows it, or the typed one when it shows several."""
+    if len(choices) == 1:
+        return choices[0]
+    match = tableau_spelling((typed,), choices)[0] if typed else ""
+    if match in choices:
+        return match
+    if not choices:
+        raise RuntimeError("Tableau shows this account no missions. Check the Church account in Settings.")
+    raise RuntimeError(f"This Tableau account can see {len(choices)} missions. Type yours under Settings > Mission, then run again.")
 
 
 def apply_dashboard_definition(driver, mission, zone, timeout=90, *, days=30):

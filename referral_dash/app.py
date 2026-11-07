@@ -22,11 +22,11 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from . import credentials, drive
+from . import credentials, drive, missions
 from .cleanup import prune_app_data, prune_reports, report_runs
 from .engine import generate_reports
 from .district_summary import period_label
-from .period import make_period, settings_period
+from .period import default_range, make_period, settings_period
 from .settings import (TIMEZONES, VERSION, app_directory, data_directory, is_configured, load_settings,
                        save_settings, suggested_timezone, validate_settings)
 
@@ -66,6 +66,7 @@ class Controller:
         self.last_seen = time.monotonic()
         self.window_connected = False
         self.drive_state = {"connecting": False, "error": ""}
+        self.drive_cancel = threading.Event()
 
     def seen(self):
         self.last_seen = time.monotonic()
@@ -86,6 +87,7 @@ class Controller:
             "account": {"email": login.email, "username": login.username, "saved": login.complete},
             "run": run, "recent": self.recent(output),
             "plan": self.plan(settings),
+            "today": default_range(settings)[1].isoformat(),
             "drive": {**drive_state, "available": drive.available(), "folder_name": settings["drive_upload_folder_name"],
                       "connected": bool(settings["drive_upload_folder_id"]),
                       "folder_link": drive.folder_link(settings["drive_upload_folder_id"]) if settings["drive_upload_folder_id"] else ""},
@@ -131,7 +133,7 @@ class Controller:
     # ----- settings -----
     def save_settings(self, body):
         current = load_settings()
-        allowed = {"mission", "lightning", "pepper", "start_time", "cutoff_time", "timezones",
+        allowed = {"mission", "lightning", "pepper", "start_time", "cutoff_time", "timezones", "timezone_auto",
                    "tableau_view_url", "lookback_days", "show_browser", "keep_reports", "report_mode",
                    "report_start", "report_end", "compare_mode", "compare_days", "compare_start", "compare_end"}
         merged = validate_settings({**current, **{k: v for k, v in body.items() if k in allowed}})
@@ -144,22 +146,28 @@ class Controller:
     # ----- Google Drive -----
     def connect_drive(self):
         """Sign-in happens in the browser, so it runs apart from the window's requests."""
+        cancel = threading.Event()
         with self.lock:
             if self.drive_state["connecting"]:
                 return
+            self.drive_cancel = cancel
             self.drive_state.update(connecting=True, error="")
 
         def work():
             error = ""
             try:
-                folder = drive.connect()
+                folder = drive.connect(cancelled=cancel)
                 save_settings({**load_settings(), "drive_upload_folder_id": folder["id"], "drive_upload_folder_name": folder["name"]})
             except Exception as exc:
                 traceback.print_exc()
-                error = str(exc)
+                error = "" if cancel.is_set() else str(exc)
             with self.lock:
                 self.drive_state.update(connecting=False, error=error)
         threading.Thread(target=work, daemon=True).start()
+
+    def cancel_drive(self):
+        """For when the browser tab was closed: stops waiting instead of holding the button for minutes."""
+        self.drive_cancel.set()
 
     def disconnect_drive(self):
         drive.disconnect()
@@ -190,8 +198,8 @@ class Controller:
             settings = {**settings, "show_browser": True}
         login = credentials.load_login()
         if source != "sample":
-            if not is_configured(settings):
-                raise ValueError("Open Settings and enter your mission name exactly as Tableau shows it.")
+            if source == "file" and not is_configured(settings):
+                raise ValueError("Run from Tableau once so Referral Dash can find your mission, or type it under Settings > Mission.")
             if source == "tableau" and not login.complete:
                 raise ValueError("Open Settings and save the Church account used for Tableau.")
         if source == "sample":
@@ -248,7 +256,12 @@ class Controller:
                 self._step("download", "active")
                 from .tableau.download import download_dashboard
                 downloads = data_directory() / "downloads"
-                filename = download_dashboard(settings, login, downloads, period, lambda m: self._progress(m), self._attention)
+                def found(name):
+                    # The reports are titled with it, and later runs skip looking it up.
+                    settings["mission"] = name
+                    save_settings({**load_settings(), "mission": name})
+                filename = download_dashboard(settings, login, downloads, period, lambda m: self._progress(m),
+                                              self._attention, found)
                 for old in sorted(downloads.glob("tableau_export_*.csv"))[:-KEEP_DOWNLOADS]:
                     old.unlink(missing_ok=True)
                 self._step("download", "done", "Downloaded from Tableau")
@@ -299,8 +312,10 @@ class Controller:
         try:
             link = drive.upload_run(folder, current, lambda m, done=None, total=None:
                                     self._progress(m, 82 + 17 * done / total if total else None))
-            drive.prune_uploads(current, settings["keep_reports"])
-            self._step("upload", "done", settings["drive_upload_folder_name"])
+            # In a shared drive only Content managers can trash, so the previous copy may have to stay.
+            stuck = drive.leftover_uploads(current)
+            self._step("upload", "done", settings["drive_upload_folder_name"] +
+                       (" · the previous copy stays: moving it to the trash needs Content manager access" if stuck else ""))
             return link, ""
         except Exception as exc:
             traceback.print_exc()
@@ -350,6 +365,8 @@ class Handler(BaseHTTPRequestHandler):
                 # Asked by a second launch; it must not count as the window being open.
                 return self._json({"idle": time.monotonic() - self.controller.last_seen})
             self.controller.seen()
+            if path == "/api/missions":
+                return self._json({"missions": missions.load()})
             if path == "/api/state":
                 try:
                     return self._json(self.controller.state())
@@ -381,6 +398,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/account/forget": credentials.forget_login,
             "/api/output-folder": c.pick_output_folder,
             "/api/drive/connect": c.connect_drive,
+            "/api/drive/cancel": c.cancel_drive,
             "/api/drive/disconnect": c.disconnect_drive,
             "/api/run": lambda: c.start_run(str(body.get("source", "tableau")), bool(body.get("watch"))),
             "/api/open": lambda: c.open_target(str(body.get("target", ""))),

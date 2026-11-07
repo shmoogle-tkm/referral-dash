@@ -9,3 +9,7 @@ google_oauth_client.json
 drive_oauth_client.json
 google-token.json
 settings.json
+
+# Design tool working files (screenshots and sketches); its notes and config are committed.
+.impeccable/review/
+.impeccable/mocks/

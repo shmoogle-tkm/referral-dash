@@ -1,0 +1,59 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/canon.html"
+        ],
+        "createdAt": "2026-11-07T03:15:33.731Z",
+        "reason": "Claude: throwaway preview sketch for the decision page, never shipped; the built screen gets its own check"
+      },
+      {
+        "rule": "overused-font",
+        "value": "inter",
+        "createdAt": "2026-11-07T03:56:16.977Z",
+        "reason": "user confirmed: owner approved downloading Inter as the closest licensable match to Apple's SF for an Apple-style app"
+      },
+      {
+        "rule": "dark-glow",
+        "value": "*",
+        "files": [
+          "referral_dash/web/index.html"
+        ],
+        "createdAt": "2026-11-07T14:55:18.320Z",
+        "reason": "user confirmed: owner rejected the redesign and asked to keep the original dark design (\"keep the old method\"), which includes its glow and eyebrow"
+      },
+      {
+        "rule": "kicker-above-heading",
+        "value": "*",
+        "files": [
+          "referral_dash/web/index.html"
+        ],
+        "createdAt": "2026-11-07T14:55:21.898Z",
+        "reason": "user confirmed: owner rejected the redesign and asked to keep the original dark design (\"keep the old method\"), which includes its glow and eyebrow"
+      },
+      {
+        "rule": "marquee",
+        "value": "*",
+        "files": [
+          "referral_dash/web/index.html"
+        ],
+        "createdAt": "2026-11-07T14:55:25.473Z",
+        "reason": "Claude: the only looping motion is the progress-bar sheen and spinners while a run is working, which signal live progress, not scrolling content"
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "referral_dash/web/styles.css"
+        ],
+        "createdAt": "2026-11-07T14:58:41.765Z",
+        "reason": "user confirmed: the toast's left stripe is the only side tab and belongs to the original design the owner asked to keep"
+      }
+    ]
+  }
+}

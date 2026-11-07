@@ -38,7 +38,8 @@ class DashboardTemplate():
         IMAGE_PATH = os.path.join(self.get_base_path(), "images", "dashboard.png")
 
         LIGHTNING_ICON_PATH = os.path.join(self.get_base_path(), "images", "lightning.png")
-        PEPPER_ICON_PATH = os.path.join(self.get_base_path(), "images", "hotpepper.png")
+        # The find-goal icon (it was a pepper before; the setting is still called "pepper").
+        PEPPER_ICON_PATH = os.path.join(self.get_base_path(), "images", "fire.png")
 
         BIG_FONT_PATH = os.path.join(self.get_base_path(), "fonts", "CalSans-Regular.ttf")
         SMALL_FONT_PATH = os.path.join(self.get_base_path(), "fonts", "CalSans-Regular.ttf")
@@ -60,17 +61,19 @@ class DashboardTemplate():
         # ======================
         # ICON CONTROLS
         # ======================
-        LIGHTNING_HEIGHT = 90
+        # Both icons are trimmed to the drawing, so these are their drawn heights.
+        LIGHTNING_HEIGHT = 80
         LIGHTNING_OFFSET_X = -80
         LIGHTNING_OFFSET_Y = 90
         LIGHTNING_ABSOLUTE_POS = None
 
-        PEPPER_HEIGHT = 110
+        PEPPER_HEIGHT = 80
         PEPPER_OFFSET_X = -80
         PEPPER_OFFSET_Y = 90
         PEPPER_ABSOLUTE_POS = None
 
         format_date_pattern = '%m/%d/%Y %I:%M:%S %p'
+        LIST_LIMIT = 20
 
         # ======================
         # 🔥 ALL DYNAMIC TEXT DATA
@@ -88,7 +91,7 @@ class DashboardTemplate():
             "time": {
                 "value": None if median_response_time is None else safe_round(median_response_time, 1),
                 "unit": " min",
-                "label": "Median response time"
+                "label": "Response time"
             },
             "found": {
                 "value": safe_round(percent_found, 1),
@@ -104,10 +107,13 @@ class DashboardTemplate():
             {"center": (760, 543), "top": f"{percent_attended_church}%", "bottom": "at church"},
         ]
 
-        PEOPLE = []
-        uncontacted_people_list = uncontacted_people_list or []
-        for p in uncontacted_people_list:
-            PEOPLE.append({"name": p['name'], "date": datetime.strptime(p['date'], format_date_pattern).strftime("%m/%d"), "area": p['area']})
+        # Longest waiting first, and only as many names as keep the picture a sensible size.
+        waiting = sorted(uncontacted_people_list or [], key=lambda p: datetime.strptime(p['date'], format_date_pattern))
+        PEOPLE = [{"name": p['name'], "date": datetime.strptime(p['date'], format_date_pattern).strftime("%m/%d"), "area": p['area']}
+                  for p in waiting[:LIST_LIMIT]]
+        unlisted = len(waiting) - len(PEOPLE)
+        list_heading = (f"{len(waiting)} Unattempted Referral{'' if len(waiting) == 1 else 's'}"
+                        if waiting else "No Unattempted Referrals")
 
         # ======================
         # POSITIONS
@@ -129,7 +135,7 @@ class DashboardTemplate():
         # LOAD IMAGE & FONTS
         # ======================
         img = Image.open(IMAGE_PATH).convert("RGBA")
-        needed_height = 850 + max(0, math.ceil(len(PEOPLE) / 4) - 1) * 75
+        needed_height = 850 + max(0, math.ceil(len(PEOPLE) / 4) - 1) * 75 + (60 if unlisted else 0)
         if needed_height > img.height:
             expanded = Image.new("RGBA", (img.width, needed_height), img.getpixel((0, img.height - 1)))
             expanded.paste(img, (0, 0))
@@ -208,7 +214,7 @@ class DashboardTemplate():
             number = "N/A" if value is None else f"{value:g}"
             size = BIG_FONT_SIZE
             font = big_font
-            inline = value is not None and unit.strip() == "%"
+            inline = value is not None
             unit_box = draw.textbbox((0,0),unit.strip(),font=small_font)
             unit_width = unit_box[2] - unit_box[0]
             allowance = 195 - (unit_width+10 if inline else 0)
@@ -226,14 +232,10 @@ class DashboardTemplate():
             if value is not None and not inline:
                 draw_centered_text(draw, (center[0], center[1] + 48), unit.strip(), small_font, TEXT_COLOR)
 
-        def original_icon_position(value, unit, center):
-            # Preserve the original release's graphic size and lower-dial anchor,
-            # independently of the corrected number layout.
-            parts=[(f"{value:g}",big_font),(unit,small_font)]
-            boxes=[draw.textbbox((0,0),text,font=font) for text,font in parts]
-            width=sum(b[2]-b[0] for b in boxes)
-            height=max(b[3]-b[1] for b in boxes)
-            return (int(center[0]-width//2+width-80),int(center[1]-height//2+90))
+        def centered_icon_position(icon, center):
+            # Center the drawn part of the icon, not its padded canvas, on the point.
+            box = icon.getchannel("A").getbbox() or (0, 0, icon.width, icon.height)
+            return (int(center[0] - (box[0] + box[2]) / 2), int(center[1] - (box[1] + box[3]) / 2))
 
         def draw_centered_stacked_text(draw, center, top, bottom, top_font, bottom_font, fill, spacing=20):
             top_bbox = draw.textbbox((0, 0), top, font=top_font)
@@ -270,10 +272,12 @@ class DashboardTemplate():
         # ======================
         time_data = GAUGE_DATA["time"]
 
+        # Always minutes; a long number shrinks to stay inside the circle.
         draw_gauge(LEFT_CIRCLE_CENTER, time_data["value"], time_data["unit"])
 
         if time_data["value"] is not None and time_data["value"] < self.lightning_time:
-            img.alpha_composite(lightning_icon, original_icon_position(time_data["value"],time_data["unit"],(440,410)))
+            # On the dial's center line, between the number and the label.
+            img.alpha_composite(lightning_icon, centered_icon_position(lightning_icon, (LEFT_CIRCLE_CENTER[0], LEFT_CIRCLE_CENTER[1] + 74)))
 
         draw_centered_text(
             draw,
@@ -291,7 +295,8 @@ class DashboardTemplate():
         draw_gauge(RIGHT_CIRCLE_CENTER, found_data["value"], found_data["unit"])
 
         if found_data["value"] >= self.hot_found:
-            img.alpha_composite(pepper_icon, original_icon_position(found_data["value"],found_data["unit"],(1070,410)))
+            # On the dial's center line, halfway between the number and the "Found" label.
+            img.alpha_composite(pepper_icon, centered_icon_position(pepper_icon, (RIGHT_CIRCLE_CENTER[0], RIGHT_CIRCLE_CENTER[1] + 74)))
 
         draw_centered_text(
             draw,
@@ -321,9 +326,12 @@ class DashboardTemplate():
         # ======================
 
         draw_centered_text(draw, (760, BOTTOM_LIST_CONFIG["start_y"] - 75),
-                           "Unattempted Referrals", bottom_list_font, TEXT_COLOR)
+                           list_heading, bottom_list_font, TEXT_COLOR)
 
         rows = math.ceil(len(PEOPLE) / BOTTOM_LIST_CONFIG["max_per_row"])
+        if unlisted:
+            more_y = BOTTOM_LIST_CONFIG["start_y"] + rows * BOTTOM_LIST_CONFIG["row_spacing"] - 5
+            draw_centered_text(draw, (760, more_y), f"+ {unlisted} more", small_type2_font, TEXT_COLOR)
 
         for row in range(rows):
             row_people = PEOPLE[row * BOTTOM_LIST_CONFIG["max_per_row"]:(row + 1) * BOTTOM_LIST_CONFIG["max_per_row"]]

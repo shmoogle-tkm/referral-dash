@@ -4,7 +4,7 @@ import os
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 package = "referral_dash"
-datas = [(f"{package}/{folder}", folder) for folder in ("web", "fonts", "images", "sample-data")]
+datas = [(f"{package}/{folder}", folder) for folder in ("web", "fonts", "images", "sample-data", "data")]
 datas += collect_data_files("selenium")
 # Google treats a Desktop app's client file as not secret; without one, the Drive option stays hidden.
 if os.path.isfile("drive_oauth_client.json"):

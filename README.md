@@ -30,8 +30,9 @@ and what they compare with (N days before, or a date range). The main screen
 shows the result in one line; fixed dates stay until they are changed there.
 
 5. **Uploads to Google Drive** (optional). Connect Google Drive opens Google's
-   sign-in and folder picker in one browser trip. Each run uploads its pictures
-   there, and sets beyond the keep count go to the Drive trash. The app asks only
+   sign-in and folder picker in one browser trip; the folder can be in a shared
+   drive. Its button says Insert. Each run uploads its pictures
+   there as its five folders, replacing the previous copy, which goes to the Drive trash. The app asks only
    for `drive.file`, so it can see only that folder and what it made there.
 
 ## Google Drive setup

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
-    <meta name="theme-color" content="#070a0f">
+    <meta name="theme-color" content="#020a1f">
     <link rel="icon" href="./app-icon.png">
     <link rel="stylesheet" href="./styles.css">
     <script src="./app.js" defer></script>
@@ -43,17 +43,21 @@
           </div>
         </section>
 
-        <section id="work" class="card work" aria-live="polite" hidden>
-          <div class="work-head">
-            <div class="work-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10h-3a7 7 0 1 1-7-7V2Z"/></svg></div>
-            <div class="work-copy"><strong id="work-title">Making reports</strong><span id="work-message">Starting…</span></div>
-            <div class="work-time" id="work-time">0:00</div>
+        <div class="work-wrap" id="work-wrap" hidden>
+          <div class="work-clip">
+            <section id="work" class="card work">
+              <div class="work-head">
+                <div class="work-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10h-3a7 7 0 1 1-7-7V2Z"/></svg></div>
+                <div class="work-copy" aria-live="polite"><strong id="work-title">Making reports</strong><span id="work-message">Starting…</span></div>
+                <div class="work-time" id="work-time">0:00</div>
+              </div>
+              <div class="work-track"><span id="work-bar"></span></div>
+              <ol class="work-steps" id="work-steps"></ol>
+              <div class="work-result" id="work-result" hidden></div>
+              <div class="work-actions" id="work-actions" hidden></div>
+            </section>
           </div>
-          <div class="work-track"><span id="work-bar"></span></div>
-          <ol class="work-steps" id="work-steps"></ol>
-          <div class="work-result" id="work-result" hidden></div>
-          <div class="work-actions" id="work-actions" hidden></div>
-        </section>
+        </div>
 
         <section class="card save-card">
           <div class="save-row">
@@ -78,6 +82,7 @@
             <div class="save-actions">
               <button class="button" id="drive-open" hidden>Open</button>
               <button class="button" id="drive-connect">Connect Google Drive</button>
+              <button class="button" id="drive-cancel" hidden>Cancel</button>
               <button class="button" id="drive-disconnect" hidden>Disconnect</button>
             </div>
           </div>
@@ -96,9 +101,7 @@
 
       <main id="settings-view" class="view" hidden>
         <section class="welcome" id="welcome">
-          <p class="eyebrow">Welcome</p>
-          <h1>Two quick things, once.</h1>
-          <p class="lede">After this, making the week's reports is one click.</p>
+          <h1>Set up Referral Dash</h1>
         </section>
         <div class="settings-head" id="settings-head">
           <button class="ghost-button" data-view="home">
@@ -113,11 +116,11 @@
             <span class="step" id="account-step">1</span>
             <div>
               <h2>Church account</h2>
-              <p>Used to sign in to Tableau for you. It is kept in Windows Credential Manager on this computer only.</p>
+              <p>Signs in to Tableau for you. Stays on this PC.</p>
             </div>
           </div>
           <div class="fields">
-            <label class="wide">Missionary email<input name="email" type="email" autocomplete="email" required placeholder="The email you enter on Tableau's sign-in page"></label>
+            <label class="wide">Missionary email<input name="email" type="email" autocomplete="email" required placeholder="Your Tableau sign-in email"></label>
             <label>Church username<input name="username" autocomplete="username" required></label>
             <label>Password
               <span class="password-field">
@@ -126,7 +129,7 @@
               </span>
             </label>
           </div>
-          <div class="form-foot"><span class="saved-note" id="account-note"></span><button class="button button-primary" type="submit">Save account</button></div>
+          <div class="form-foot save-foot"><span class="saved-note" id="account-note"></span><button class="button button-primary" type="submit">Save</button></div>
         </form>
 
         <form class="card form-card" id="mission-form">
@@ -134,17 +137,18 @@
             <span class="step" id="mission-step">2</span>
             <div>
               <h2>Mission</h2>
-              <p>Type it exactly the way Tableau's Mission filter lists it. It is also the title on your mission dashboard.</p>
+              <p id="mission-help">Found in Tableau on your first run.</p>
             </div>
           </div>
           <div class="fields">
-            <label class="wide">Mission name<input name="mission" required maxlength="55" placeholder="Tennessee Knoxville Mission"></label>
+            <label class="wide">Mission name<input name="mission" maxlength="55" placeholder="Found automatically" list="mission-options" autocomplete="off"></label>
+            <datalist id="mission-options"></datalist>
             <label>Time zone<select name="timezone" id="timezone-select"></select></label>
           </div>
-          <div class="form-foot"><span class="saved-note" id="mission-note"></span><button class="button button-primary" type="submit">Save mission</button></div>
+          <div class="form-foot save-foot"><span class="saved-note" id="mission-note"></span><button class="button button-primary" type="submit">Save</button></div>
         </form>
 
-        <p class="setup-alt" id="setup-alt">Want to see what it makes first? <button class="link-button" data-run="sample">Try sample data</button></p>
+        <p class="setup-alt" id="setup-alt"><button class="link-button" data-run="sample">Try sample data first</button></p>
 
         <details class="card advanced" id="advanced">
           <summary>
@@ -152,40 +156,55 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 15.4-6-6L7.4 8l4.6 4.6L16.6 8 18 9.4l-6 6Z"/></svg>
           </summary>
           <form id="advanced-form">
-            <fieldset class="date-choice">
-              <legend>Reports cover</legend>
-              <label class="choice"><input type="radio" name="report_mode" value="days"><span>Past</span><input class="days-input" name="lookback_days" type="number" min="1" max="365"><span>days</span></label>
-              <label class="choice"><input type="radio" name="report_mode" value="range"><span>Date range</span></label>
+            <section class="setting-group">
+              <h3>Dates</h3>
+              <div class="setting-row">
+                <span class="setting-label">Reports cover</span>
+                <div class="segmented" role="radiogroup" aria-label="Reports cover">
+                  <label class="segment"><input type="radio" name="report_mode" value="days"><span>Past</span><input class="days-input" name="lookback_days" type="number" min="1" max="365" aria-label="Days"><span>days</span></label>
+                  <label class="segment"><input type="radio" name="report_mode" value="range"><span>Date range</span></label>
+                </div>
+              </div>
               <div class="date-pair" data-mode="report_mode">
                 <label>From<input name="report_start" type="date"></label>
                 <label>To<input name="report_end" type="date"></label>
               </div>
-            </fieldset>
-            <fieldset class="date-choice">
-              <legend>Compare to</legend>
-              <label class="choice"><input type="radio" name="compare_mode" value="days"><input class="days-input" name="compare_days" type="number" min="1" max="365"><span>days before</span></label>
-              <label class="choice"><input type="radio" name="compare_mode" value="range"><span>Date range</span></label>
+              <div class="setting-row">
+                <span class="setting-label">Compare to</span>
+                <div class="segmented" role="radiogroup" aria-label="Compare to">
+                  <label class="segment"><input type="radio" name="compare_mode" value="days"><input class="days-input" name="compare_days" type="number" min="1" max="365" aria-label="Days before"><span>days before</span></label>
+                  <label class="segment"><input type="radio" name="compare_mode" value="range"><span>Date range</span></label>
+                </div>
+              </div>
               <div class="date-pair" data-mode="compare_mode">
                 <label>From<input name="compare_start" type="date"></label>
                 <label>To<input name="compare_end" type="date"></label>
               </div>
-            </fieldset>
-            <p class="advanced-note" id="dates-preview"></p>
-            <div class="fields">
-              <label>Lightning under (minutes)<input name="lightning" type="number" min="0" max="1440"></label>
-              <label>Morning begins<input name="start_time" type="time"></label>
-              <label>Night begins<input name="cutoff_time" type="time"></label>
-              <label>Pepper at (% found)<input name="pepper" type="number" min="0" max="100"></label>
-              <label class="wide">Zones in another time zone <small>One per line, like <code>Hawaii = HST</code></small><textarea name="overrides" rows="2"></textarea></label>
-              <label class="wide">Tableau workbook link<input name="tableau_view_url" required></label>
-              <label class="check-row wide"><input name="show_browser" type="checkbox">Always show the browser while downloading</label>
-            </div>
-            <div class="form-foot"><span></span><button class="button" type="submit">Save advanced settings</button></div>
+              <p class="advanced-note" id="dates-preview"></p>
+            </section>
+
+            <section class="setting-group">
+              <h3>Dashboards</h3>
+              <div class="mini-fields">
+                <label>Speed goal<span class="unit-field"><input name="lightning" type="number" min="0" max="1440"><span>min</span></span></label>
+                <label>Find goal<span class="unit-field"><input name="pepper" type="number" min="0" max="100"><span>% found</span></span></label>
+                <label>Morning begins<input name="start_time" type="time"></label>
+                <label>Night begins<input name="cutoff_time" type="time"></label>
+              </div>
+              <label>Zones in another time zone<textarea name="overrides" rows="2" placeholder="Hawaii = Pacific/Honolulu (one per line)"></textarea></label>
+            </section>
+
+            <section class="setting-group">
+              <h3>Tableau</h3>
+              <label>Workbook link<input name="tableau_view_url" required></label>
+              <label class="switch-row"><span>Always show the browser</span><input name="show_browser" type="checkbox" class="switch"></label>
+            </section>
+
+            <div class="form-foot save-foot"><span></span><button class="button button-primary" type="submit">Save changes</button></div>
           </form>
         </details>
       </main>
 
-      <footer><span id="footer-version">Referral Dash</span><span>Everything runs on this computer.</span></footer>
     </div>
     <div id="toast-region" class="toast-region" aria-live="assertive"></div>
   </body>

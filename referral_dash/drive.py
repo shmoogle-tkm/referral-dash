@@ -110,7 +110,7 @@ def _exchange(fields):
                      headers={"Content-Type": "application/x-www-form-urlencoded"})
     except HTTPError as error:
         if error.code in (400, 401):
-            raise DriveError("Google Drive needs to be connected again. Click Connect Google Drive. " + error.detail) from error
+            raise DriveError("Google Drive needs to be connected again. Click Connect next to Google Drive. " + error.detail) from error
         raise DriveError(f"Google sign-in failed: {error.detail or error.code}") from error
 
 
@@ -121,7 +121,7 @@ class _Session:
         self.client = _client()
         self.refresh_token = credentials.load_drive_token()
         if not self.refresh_token:
-            raise DriveError("Google Drive needs to be connected again. Click Connect Google Drive.")
+            raise DriveError("Google Drive needs to be connected again. Click Connect next to Google Drive.")
         self.lock = threading.Lock()
         self.access_token = None
         self.expires = 0
@@ -150,7 +150,7 @@ class _Session:
 
 
 # ----- connecting -----
-def _wait_for_redirect(server, state, deadline):
+def _wait_for_redirect(server, state, deadline, cancelled=None):
     """Serve the loopback address until Google sends the browser back to it."""
     answer = {}
 
@@ -170,16 +170,21 @@ def _wait_for_redirect(server, state, deadline):
 
     server.RequestHandlerClass = Handler
     while not answer:
+        if cancelled is not None and cancelled.is_set():
+            raise DriveError("Google sign-in was cancelled, so Google Drive wasn't connected.")
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise DriveError("Google sign-in timed out. Click Connect Google Drive to try again.")
+            raise DriveError("Google sign-in timed out. Click Connect next to Google Drive to try again.")
         server.timeout = min(remaining, 1)
         server.handle_request()
     return answer
 
 
-def connect(open_browser=webbrowser.open):
-    """Sign in and pick a folder in one browser trip; returns the folder's id and name."""
+def connect(open_browser=webbrowser.open, cancelled=None):
+    """Sign in and pick a folder, in My Drive or a shared drive, in one browser trip.
+
+    Returns the folder's id and name. `cancelled` is an Event that stops the wait.
+    """
     client = _client()
     verifier = secrets.token_urlsafe(64)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
@@ -194,32 +199,31 @@ def connect(open_browser=webbrowser.open):
             # Google's Picker runs as part of sign-in; only folders can be chosen.
             "trigger_onepick": "true", "allow_folder_selection": "true", "mimetypes": FOLDER_TYPE,
         }))
-        answer = _wait_for_redirect(server, state, time.monotonic() + SIGN_IN_SECONDS)
+        answer = _wait_for_redirect(server, state, time.monotonic() + SIGN_IN_SECONDS, cancelled)
     finally:
         server.server_close()
     if "code" not in answer:
         raise DriveError("Google sign-in was cancelled, so Google Drive wasn't connected.")
     if not answer.get("picked_file_ids"):
         raise DriveError("No folder was picked, so Google Drive wasn't connected. Try again and choose a folder.")
-    folder_id = answer["picked_file_ids"].split(",")[0]
     tokens = _exchange({"client_id": client["id"], "client_secret": client["secret"], "code": answer["code"],
                         "code_verifier": verifier, "grant_type": "authorization_code", "redirect_uri": redirect})
     if not tokens.get("refresh_token"):
-        raise DriveError("Google didn't allow lasting access. Click Connect Google Drive to try again.")
+        raise DriveError("Google didn't allow lasting access. Click Connect next to Google Drive to try again.")
     credentials.save_drive_token(tokens["refresh_token"])
+    folder_id = answer["picked_file_ids"].split(",")[0]
     try:
-        name = _folder_name(_Session(), folder_id)
+        return {"id": folder_id, "name": _folder_name(_Session(), folder_id)}
     except DriveError:
         credentials.forget_drive_token()
         raise
-    return {"id": folder_id, "name": name}
 
 
 def _folder_name(session, folder_id):
     item = session.call("GET", f"{API_URL}/{folder_id}?" + urlencode(
         {"fields": "name,mimeType,capabilities/canAddChildren", "supportsAllDrives": "true"}))
     if item.get("mimeType") != FOLDER_TYPE:
-        raise DriveError("That isn't a folder. Click Connect Google Drive and choose a folder.")
+        raise DriveError("That isn't a folder. Click Connect next to Google Drive and choose a folder.")
     if not item.get("capabilities", {}).get("canAddChildren", True):
         raise DriveError(f"This Google account can't add files to \"{item.get('name')}\". Choose a folder it can edit.")
     return item["name"]
@@ -245,8 +249,8 @@ def _upload_file(session, path, parent):
     kind = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     body = (f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{meta}\r\n"
             f"--{boundary}\r\nContent-Type: {kind}\r\n\r\n").encode() + path.read_bytes() + f"\r\n--{boundary}--\r\n".encode()
-    session.call("POST", f"{UPLOAD_URL}?uploadType=multipart&fields=id&supportsAllDrives=true", data=body,
-                 content_type=f"multipart/related; boundary={boundary}")
+    return session.call("POST", f"{UPLOAD_URL}?uploadType=multipart&fields=id&supportsAllDrives=true", data=body,
+                        content_type=f"multipart/related; boundary={boundary}")["id"]
 
 
 def _trash(session, file_id):
@@ -258,7 +262,7 @@ def _uploads_path():
 
 
 def _load_uploads():
-    """Report sets this app uploaded, oldest first, by Drive folder."""
+    """What this app put in each Drive folder: the current copy, and older ones not yet in the trash."""
     try:
         return json.loads(_uploads_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -272,66 +276,75 @@ def _save_uploads(uploads):
     temporary.replace(target)
 
 
+def _entries(value):
+    """(current, stale) for one Drive folder. Older versions kept a list of whole dated sets; all of it is stale now."""
+    if isinstance(value, list):
+        return [], value
+    value = value or {}
+    return value.get("current", []), value.get("stale", [])
+
+
 def upload_run(run_folder, parent_id, progress=lambda message, done=None, total=None: None):
-    """Copy a report set's pictures, with their subfolders, into the Drive folder; return its link."""
+    """Put a report set's folders (1. Areas, 2. Districts, ...) straight into the Drive folder, replacing the last copy.
+
+    The new copy is uploaded completely before the old one goes to the Drive trash, so a failed
+    upload leaves the last good copy in place. Only what this app put there is ever touched.
+    Returns the Drive folder's link.
+    """
     session = _Session()
     run_folder = Path(run_folder)
     files = sorted(p for p in run_folder.rglob("*") if p.suffix.lower() in PICTURE_SUFFIXES and p.is_file())
-    progress("Creating the Google Drive folder...")
-    root = _make_folder(session, run_folder.name, parent_id)
+    progress("Creating the Google Drive folders...")
+    folders = {run_folder: parent_id}
+    made = []  # Everything created directly in the picked folder: the new copy.
     try:
-        folders = {run_folder: root}
         for path in files:
             for folder in reversed([path.parent, *path.parent.parents]):
                 if folder not in folders and run_folder in folder.parents:
                     folders[folder] = _make_folder(session, folder.name, folders[folder.parent])
+                    if folder.parent == run_folder:
+                        made.append({"id": folders[folder], "name": folder.name})
         with ThreadPoolExecutor(max_workers=UPLOAD_WORKERS) as pool:
-            pending = [pool.submit(_upload_file, session, path, folders[path.parent]) for path in files]
+            pending = {pool.submit(_upload_file, session, path, folders[path.parent]): path for path in files}
             try:
                 for done, future in enumerate(as_completed(pending), 1):
-                    future.result()
+                    file_id = future.result()
+                    if pending[future].parent == run_folder:
+                        made.append({"id": file_id, "name": pending[future].name})
                     progress(f"Uploading to Google Drive ({done} of {len(files)})...", done, len(files))
             except BaseException:
                 for future in pending:
                     future.cancel()
                 raise
     except BaseException:
-        # A half-uploaded set is worse than none; put it in the Drive trash.
-        try:
-            _trash(session, root)
-        except DriveError:
-            pass
+        # A half-uploaded copy is worse than the last good one; put it in the Drive trash.
+        for item in made:
+            try:
+                _trash(session, item["id"])
+            except DriveError:
+                pass
         raise
     uploads = _load_uploads()
-    uploads.setdefault(parent_id, []).append({"id": root, "name": run_folder.name})
+    current, stale = _entries(uploads.get(parent_id))
+    old = stale + current
+    # Record the new copy before removing the old one, so an interruption can't leave it untracked.
+    uploads[parent_id] = {"current": made, "stale": old}
     _save_uploads(uploads)
-    return folder_link(root)
-
-
-def prune_uploads(parent_id, keep):
-    """Move this app's older uploads to the Drive trash, keeping the newest `keep` (0 keeps all).
-
-    Only sets recorded here are touched; nothing else in the folder is even visible to the app.
-    Returns how many were moved. One that won't move stays listed and is tried again next run.
-    """
-    if keep <= 0:
-        return 0
-    uploads = _load_uploads()
-    sets = uploads.get(parent_id, [])
-    old, newest = sets[:-keep], sets[-keep:]
-    if not old:
-        return 0
-    session = _Session()
-    still_there = []
-    moved = 0
+    if old:
+        progress("Moving the previous copy to the Google Drive trash...")
+    left = []
     for item in old:
         try:
             _trash(session, item["id"])
-            moved += 1
         except DriveError as error:
-            # Already deleted by hand means there is nothing left to do.
+            # Already deleted by hand means there is nothing left to do; anything else is tried next run.
             if "(404)" not in str(error):
-                still_there.append(item)
-    uploads[parent_id] = still_there + newest
+                left.append(item)
+    uploads[parent_id] = {"current": made, "stale": left}
     _save_uploads(uploads)
-    return moved
+    return folder_link(parent_id)
+
+
+def leftover_uploads(parent_id):
+    """How many older items this app put in the folder could not be moved to the trash yet."""
+    return len(_entries(_load_uploads().get(parent_id))[1])
