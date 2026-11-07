@@ -90,7 +90,7 @@ class ReportTests(Isolated):
                 target = self.rewrite_sample(folder, case)
                 with self.assertRaises(ValueError):
                     engine.generate_reports(target, folder, SETTINGS)
-                self.assertEqual(list(Path(folder).glob("Dashboard_*")), [])
+                self.assertEqual(list(Path(folder).glob("Referral Reports*")), [])
 
     def test_real_tableau_shapes_date_only_milestones_and_unplaced_rows(self):
         def shape(rows):
@@ -107,6 +107,21 @@ class ReportTests(Isolated):
             timed_column_without_time = lambda rows: [{**rows[0], "First Contact Attempt Event Date": "10/01/2026"}]
             with self.assertRaisesRegex(ValueError, "hh:mm:ss"):
                 engine.read_export(self.rewrite_sample(folder, timed_column_without_time), SETTINGS)
+
+    def test_folders_are_named_for_their_dates(self):
+        from referral_dash.district_summary import folder_label
+        self.assertEqual(folder_label("2026-10-07", "2026-11-06"), "Oct 7 to Nov 6, 2026")
+        self.assertEqual(folder_label("2025-12-20", "2026-01-05"), "Dec 20, 2025 to Jan 5, 2026")
+        self.assertEqual(folder_label("2026-10-07", "2026-10-07"), "Oct 7, 2026")
+        with tempfile.TemporaryDirectory() as folder:
+            first, _ = engine.generate_reports(SAMPLE, folder, SETTINGS, period=SAMPLE_PERIOD)
+            second, _ = engine.generate_reports(SAMPLE, folder, SETTINGS, period=SAMPLE_PERIOD)
+            third, _ = engine.generate_reports(SAMPLE, folder, SETTINGS, period=SAMPLE_PERIOD)
+            whole, _ = engine.generate_reports(SAMPLE, folder, SETTINGS)
+            self.assertEqual((first.name, second.name, third.name, whole.name),
+                             ("Referral Reports - Oct 1 to Oct 8, 2026", "Referral Reports - Oct 1 to Oct 8, 2026 (2)",
+                              "Referral Reports - Oct 1 to Oct 8, 2026 (3)", "Referral Reports - Sep 24 to Oct 8, 2026"))
+            self.assertEqual({p.name for p in Path(folder).iterdir()}, {first.name, second.name, third.name, whole.name})
 
     def test_utf8_comma_export(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -209,6 +224,12 @@ class ComparisonTests(Isolated):
             self.assertIsNotNone(engine.read_export(only_october, SETTINGS, SAMPLE_PERIOD, baseline_covered=True)[1])
             with self.assertRaisesRegex(ValueError, "no referrals from"):
                 engine.read_export(only_october, SETTINGS, make_period(SETTINGS, "2026-01-01", "2026-01-31"))
+
+    def test_a_new_install_compares_with_seven_days_before(self):
+        self.assertEqual(DEFAULTS["compare_days"], 7)
+        self.assertEqual(DEFAULTS["compare_mode"], "days")
+        period = make_period(validate_settings({"mission": "Any Mission"}), "2026-08-08", "2026-09-08")
+        self.assertEqual((period.baseline_start, period.baseline_end), (date(2026, 8, 1), date(2026, 9, 1)))
 
     def test_range_and_week_earlier_dates(self):
         period = make_period(SETTINGS, "2026-08-08", "2026-09-08")
@@ -373,12 +394,18 @@ class CleanupTests(Isolated):
     def test_keeps_only_the_newest_report_sets_it_made(self):
         from referral_dash.cleanup import prune_reports
         with tempfile.TemporaryDirectory() as folder:
-            runs = [self.make_run(folder, f"Dashboard_2026-10-{day:02d}_090000_abc123") for day in (1, 8, 15, 22, 29)]
-            unfinished = self.make_run(folder, "Dashboard_2026-09-01_090000_old000", finished=False)
+            # Old and new folder names together; the finish time decides what is newest, not the name.
+            names = ["Dashboard_2026-10-29_090000_abc123", "Referral Reports - Sep 1 to Sep 30, 2026",
+                     "Dashboard_2026-10-15_090000_abc123", "Referral Reports - Aug 1 to Aug 31, 2026",
+                     "Referral Reports - Jan 1 to Jan 31, 2026"]
+            runs = [self.make_run(folder, name) for name in names]
+            for age, run in enumerate(reversed(runs)):
+                os.utime(run / "run-summary.json", (time.time() - age * 3600, time.time() - age * 3600))
+            unfinished = self.make_run(folder, "Referral Reports - Feb 1 to Feb 28, 2026", finished=False)
             mine = Path(folder) / "My notes"
             mine.mkdir()
             removed = prune_reports(folder, 2)
-            self.assertEqual(sorted(removed), runs[:3])
+            self.assertEqual(sorted(removed), sorted(runs[:3]))
             self.assertEqual([r.exists() for r in runs], [False, False, False, True, True])
             # Folders the app cannot prove it finished, and the person's own folders, are never touched.
             self.assertTrue(unfinished.exists() and mine.exists())
@@ -483,7 +510,7 @@ class AppTests(Isolated):
         self.assertEqual(state["recent"], [])
         self.assertEqual(list(Path(self.output.name).iterdir()), [])
         self.finish({"source": "sample"})
-        self.assertEqual(len(list((data_directory() / "sample").glob("Dashboard_*"))), 1)
+        self.assertEqual(len(list((data_directory() / "sample").glob("Referral Reports - Oct 1 to Oct 8, 2026*"))), 1)
 
     def test_csv_runs_keep_only_the_newest_report_sets(self):
         from referral_dash.settings import load_settings, save_settings

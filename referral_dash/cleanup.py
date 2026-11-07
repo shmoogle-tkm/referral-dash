@@ -9,7 +9,9 @@ from pathlib import Path
 
 from .settings import data_directory
 
-RUN_PREFIX = "Dashboard_"
+RUN_PREFIX = "Referral Reports - "
+# Report sets made before 2.2.1 still count as this app's own.
+RUN_PREFIXES = (RUN_PREFIX, "Dashboard_")
 STAGING_PREFIX = ".building_"
 STALE_STAGING_SECONDS = 24 * 3600
 # Caches and downloaded browser components; sign-in cookies stay so the
@@ -28,9 +30,9 @@ def report_runs(output):
     folder = Path(output)
     if not folder.is_dir():
         return []
-    runs = [p for p in folder.glob(RUN_PREFIX + "*") if p.is_dir() and (p / "run-summary.json").is_file()]
-    # Names are Dashboard_<date>_<time>_<random>; within one second, the finish time decides.
-    return sorted(runs, key=lambda p: (p.name.rsplit("_", 1)[0], (p / "run-summary.json").stat().st_mtime), reverse=True)
+    runs = [p for p in folder.iterdir() if p.name.startswith(RUN_PREFIXES) and p.is_dir() and (p / "run-summary.json").is_file()]
+    # Names describe the dates covered, not when a set was made, so the finish time decides.
+    return sorted(runs, key=lambda p: (p / "run-summary.json").stat().st_mtime, reverse=True)
 
 
 def prune_reports(output, keep):

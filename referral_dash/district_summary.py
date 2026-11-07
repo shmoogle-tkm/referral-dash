@@ -139,6 +139,17 @@ def period_label(first_day, last_day):
     return f"{short(first_day)} – {short(last_day)}"
 
 
+def folder_label(first_day, last_day):
+    """Dates for a folder name: "Oct 7 to Nov 6, 2026"."""
+    first, last = date.fromisoformat(first_day), date.fromisoformat(last_day)
+
+    def short(day, pattern):
+        return day.strftime(pattern).replace(" 0", " ")
+    if first == last:
+        return short(last, "%b %d, %Y")
+    return f"{short(first, '%b %d' if first.year == last.year else '%b %d, %Y')} to {short(last, '%b %d, %Y')}"
+
+
 def render_summary(zone, district, records, previous, period, compared, output):
     current = {key(r): r for r in records}
     old = {key(r): r for r in previous["areas"]} if previous else {}

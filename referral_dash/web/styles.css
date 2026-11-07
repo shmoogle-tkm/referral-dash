@@ -150,7 +150,7 @@ svg { fill: currentColor; }
 .save-actions { display: flex; gap: 8px; }
 .keep-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
 .keep-row label { display: inline; color: inherit; font-size: inherit; font-weight: 400; }
-.keep-row select { width: auto; min-height: 34px; padding: 0 10px; border-radius: 9px; font-size: 14px; font-weight: 700; }
+.keep-row input { width: 72px; min-height: 34px; padding: 0 8px; border-radius: 9px; font-size: 14px; font-weight: 700; }
 
 /* ----- past reports ----- */
 .history { display: flex; flex-direction: column; gap: 10px; padding: 22px; }

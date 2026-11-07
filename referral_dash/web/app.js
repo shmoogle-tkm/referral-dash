@@ -130,11 +130,7 @@ function fillForms() {
   renderDateChoices();
   advanced.overrides.value = Object.entries(overrides()).map(([zone, tz]) => `${zone} = ${tz}`).join("\n");
   advanced.show_browser.checked = s.show_browser;
-  $("#keep-select").value = String(s.keep_reports);
-  if (![...$("#keep-select").options].some((o) => o.value === String(s.keep_reports))) {
-    $("#keep-select").add(new Option(String(s.keep_reports), String(s.keep_reports)), 0);
-    $("#keep-select").value = String(s.keep_reports);
-  }
+  $("#keep-input").value = s.keep_reports;
   formsFilled = true;
 }
 
@@ -179,7 +175,7 @@ function renderRunCard(ready, running) {
   $("#output-path").textContent = state.output_folder;
   $("#output-path").title = state.output_folder;
   const keep = state.settings.keep_reports;
-  $("#keep-help").textContent = keep ? "report sets. Older ones are deleted after each run to save space." : "report sets. Nothing is deleted.";
+  $("#keep-help").textContent = keep ? "report sets. Older ones are deleted after each run to save space. 0 keeps them all." : "report sets. 0 keeps them all, so nothing is deleted.";
 }
 
 function elapsed(run) {
@@ -292,7 +288,13 @@ document.addEventListener("click", async (event) => {
 $("#advanced-form").addEventListener("input", renderDateChoices);
 $("#output-change").addEventListener("click", () => act("/api/output-folder", {}));
 $("#output-open").addEventListener("click", () => act("/api/open", { target: state.output_folder }));
-$("#keep-select").addEventListener("change", (event) => act("/api/settings", { keep_reports: Number(event.target.value) }, "Saved."));
+$("#keep-input").addEventListener("change", async (event) => {
+  const field = event.target;
+  const typed = field.value.trim();
+  // A blank box is not "keep them all"; put the saved number back.
+  const saved = typed !== "" && await act("/api/settings", { keep_reports: typed }, "Saved.");
+  field.value = saved ? Number(typed) : state.settings.keep_reports;
+});
 $("#show-password").addEventListener("click", (event) => {
   const field = $("#account-password");
   field.type = field.type === "password" ? "text" : "password";

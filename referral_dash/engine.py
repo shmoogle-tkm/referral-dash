@@ -11,7 +11,8 @@ from pathlib import Path
 from .group import Mission, ReferralPerson, DATE_FORMAT
 from .template import PICTURE_SUFFIX, DashboardTemplate
 from .settings import METRIC_KEYS, VERSION, validate_settings
-from .district_summary import area_records, period_label, render_summary
+from .cleanup import RUN_PREFIX
+from .district_summary import area_records, folder_label, period_label, render_summary
 
 DATE_COLUMNS = ["First Referral Event Date", "First Contact Attempt Event Date",
                 "First Successful Contact Attempt Event Date", "First New Person Being Taught Date",
@@ -188,7 +189,8 @@ def generate_reports(filename, output_parent, settings, progress=lambda message,
         raise ValueError("Choose an existing output folder that you can write to.")
     run_id = datetime.now().strftime("%Y-%m-%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
     staging = parent / (".building_" + run_id)
-    final = parent / ("Dashboard_" + run_id)
+    name = RUN_PREFIX + (folder_label(period.start.isoformat(), period.end.isoformat()) if period
+                         else folder_label(facts["first_referral_date"], facts["last_referral_date"]))
     template = DashboardTemplate(settings["lightning"], settings["pepper"])
     districts = sorted({(r["zone"], r["district"]) for r in records + (previous["areas"] if previous else [])})
     total = 1 + len(mission.zones) + sum(len(z.districts) + sum(len(d.areas) for d in z.districts.values())
@@ -240,6 +242,10 @@ def generate_reports(filename, output_parent, settings, progress=lambda message,
                       "areas":records,"district_summaries":len(districts),
                       "period": label, "comparison_period": compared})
         (staging / "run-summary.json").write_text(json.dumps(facts, indent=2), encoding="utf-8")
+        # A second run of the same dates sits beside the first.
+        final, copy = parent / name, 2
+        while final.exists():
+            final, copy = parent / f"{name} ({copy})", copy + 1
         staging.rename(final)
     except Exception:
         # Only our unique, incomplete run directory is removed; previous output is untouched.

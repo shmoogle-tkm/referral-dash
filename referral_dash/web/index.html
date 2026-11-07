@@ -69,14 +69,8 @@
             </div>
           </div>
           <div class="keep-row">
-            <label for="keep-select">Keep the newest</label>
-            <select id="keep-select">
-              <option value="4">4</option>
-              <option value="8">8</option>
-              <option value="12">12</option>
-              <option value="26">26</option>
-              <option value="0">all</option>
-            </select>
+            <label for="keep-input">Keep the newest</label>
+            <input id="keep-input" type="number" min="0" max="100" step="1">
             <span id="keep-help">report sets. Older ones are deleted after each run to save space.</span>
           </div>
         </section>
@@ -141,14 +135,14 @@
 
         <details class="card advanced" id="advanced">
           <summary>
-            <div><h2>Advanced</h2><p>The defaults work for most missions.</p></div>
+            <div><h2>Advanced</h2></div>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 15.4-6-6L7.4 8l4.6 4.6L16.6 8 18 9.4l-6 6Z"/></svg>
           </summary>
           <form id="advanced-form">
             <fieldset class="date-choice">
               <legend>What the reports cover</legend>
-              <label class="choice"><input type="radio" name="report_mode" value="days"><span>The last</span><input class="days-input" name="lookback_days" type="number" min="1" max="365"><span>days, ending today</span></label>
-              <label class="choice"><input type="radio" name="report_mode" value="range"><span>A date range</span></label>
+              <label class="choice"><input type="radio" name="report_mode" value="days"><span>Past</span><input class="days-input" name="lookback_days" type="number" min="1" max="365"><span>days</span></label>
+              <label class="choice"><input type="radio" name="report_mode" value="range"><span>Date range</span></label>
               <div class="date-pair" data-mode="report_mode">
                 <label>From<input name="report_start" type="date"></label>
                 <label>To<input name="report_end" type="date"></label>
@@ -157,7 +151,7 @@
             <fieldset class="date-choice">
               <legend>What the change arrows compare with</legend>
               <label class="choice"><input type="radio" name="compare_mode" value="days"><span>The same dates</span><input class="days-input" name="compare_days" type="number" min="1" max="365"><span>days before</span></label>
-              <label class="choice"><input type="radio" name="compare_mode" value="range"><span>A date range</span></label>
+              <label class="choice"><input type="radio" name="compare_mode" value="range"><span>Date range</span></label>
               <div class="date-pair" data-mode="compare_mode">
                 <label>From<input name="compare_start" type="date"></label>
                 <label>To<input name="compare_end" type="date"></label>
