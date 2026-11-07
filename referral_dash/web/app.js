@@ -22,8 +22,6 @@ let state = null;
 let formsFilled = false;
 let view = null;
 let wasReady = null;
-// The dates apply to one run; until they are changed they follow today's default range.
-let rangeEdited = false;
 
 async function api(path, body) {
   const response = await fetch(path, {
@@ -86,34 +84,21 @@ function longDate(day) {
   return new Date(`${day}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
-// The range the change arrows compare with: a preset shift, or the dates typed in.
-function compareRange() {
-  const [start, end] = [$("#range-start").value, $("#range-end").value];
-  const choice = $("#compare-select").value;
-  if (choice === "custom") return [$("#compare-start").value, $("#compare-end").value];
-  return start && end ? [shifted(start, Number(choice)), shifted(end, Number(choice))] : ["", ""];
-}
-
-function renderRange(ready, running) {
-  const [start, end] = [$("#range-start"), $("#range-end")];
-  $("#range").hidden = !ready;
-  if (!rangeEdited) [start.value, end.value] = state.default_range;
-  start.max = end.max = state.default_range[1];
-  start.disabled = end.disabled = running;
-  const [compareStart, compareEnd] = [$("#compare-start"), $("#compare-end")];
-  const custom = $("#compare-select").value === "custom";
-  $("#compare-fields").hidden = !custom;
-  // Opening the custom dates starts them from the range that was just showing.
-  if (!custom) [compareStart.value, compareEnd.value] = compareRange();
-  compareStart.max = compareEnd.max = state.default_range[1];
-  compareStart.disabled = compareEnd.disabled = $("#compare-select").disabled = running;
-  const [first, last] = compareRange();
-  $("#range-note").textContent = !start.value || !end.value ? "Choose both report dates."
-    : !first || !last ? "Choose both dates to compare with."
-    : last >= end.value ? "The comparison dates must end before the report's end date."
-    : `Change arrows compare with ${longDate(first)} – ${longDate(last)}.`;
-  $("#range-reset").hidden = !rangeEdited;
-  $("#range-reset").textContent = `Back to the last ${state.settings.lookback_days} days`;
+// Shows, while the form is being filled in, what these date choices would mean.
+function renderDateChoices() {
+  const form = $("#advanced-form");
+  for (const pair of $$(".date-pair")) pair.hidden = form[pair.dataset.mode].value !== "range";
+  const today = new Date().toLocaleDateString("en-CA");
+  const fixedReport = form.report_mode.value === "range";
+  const start = fixedReport ? form.report_start.value : shifted(today, Number(form.lookback_days.value) || 0);
+  const end = fixedReport ? form.report_end.value : today;
+  const fixedCompare = form.compare_mode.value === "range";
+  const days = Number(form.compare_days.value) || 0;
+  const first = fixedCompare ? form.compare_start.value : start && shifted(start, days);
+  const last = fixedCompare ? form.compare_end.value : end && shifted(end, days);
+  $("#dates-preview").textContent = start && end && first && last
+    ? `Reports will cover ${longDate(start)} – ${longDate(end)}, compared with ${longDate(first)} – ${longDate(last)}.`
+    : "Choose both dates.";
 }
 
 function daysAgo(iso) {
@@ -140,7 +125,9 @@ function fillForms() {
   account.email.value = state.account.email;
   account.username.value = state.account.username;
   const advanced = $("#advanced-form");
-  for (const key of ["lookback_days", "start_time", "cutoff_time", "lightning", "pepper", "tableau_view_url"]) advanced[key].value = s[key];
+  for (const key of ["lookback_days", "start_time", "cutoff_time", "lightning", "pepper", "tableau_view_url", "report_mode",
+                     "report_start", "report_end", "compare_mode", "compare_days", "compare_start", "compare_end"]) advanced[key].value = s[key];
+  renderDateChoices();
   advanced.overrides.value = Object.entries(overrides()).map(([zone, tz]) => `${zone} = ${tz}`).join("\n");
   advanced.show_browser.checked = s.show_browser;
   $("#keep-select").value = String(s.keep_reports);
@@ -168,19 +155,24 @@ function renderSettings(ready) {
 }
 
 function renderRunCard(ready, running) {
+  const fixedDates = state.settings.report_mode === "range";
   const last = state.recent.find((run) => run.mission === state.settings.mission);
   const due = !last || Date.now() - new Date(last.generated_utc) >= 6 * DAY;
   $("#run-eyebrow").textContent = !ready ? "Almost there" : last ? `Last run ${shortDate(last.generated_utc)} · ${daysAgo(last.generated_utc)}` : "First run";
-  $("#run-title").textContent = !ready ? "Finish setup to make reports" : rangeEdited ? "Make reports for these dates" : due ? "Make this week's reports" : "This week's reports are done";
+  $("#run-title").textContent = !ready ? "Finish setup to make reports" : fixedDates ? "Make reports for these dates" : due ? "Make this week's reports" : "This week's reports are done";
   $("#run-lede").textContent = !ready
     ? "Add your Church account and mission in Settings. It takes a minute."
-    : "Signs in to Tableau, downloads your referrals, and makes every dashboard and district summary, compared with the week before.";
+    : "Signs in to Tableau, downloads your referrals, and makes every dashboard and district summary.";
   const button = $("#run-button");
   button.disabled = running;
-  const fresh = due || rangeEdited;
+  const fresh = due || fixedDates;
   button.textContent = running ? "Running…" : !ready ? "Finish setup" : fresh ? "Run now" : "Run again";
   button.classList.toggle("is-quiet", ready && !fresh && !running);
-  renderRange(ready, running);
+  const plan = $("#plan-line");
+  plan.hidden = !ready;
+  plan.className = "plan-line" + (state.plan.error ? " is-error" : "");
+  plan.textContent = state.plan.error ? `Check the dates in Settings > Advanced: ${state.plan.error}`
+    : `${state.plan.period}, compared with ${state.plan.compared}`;
   $$(".run-alternatives [data-run]").forEach((b) => (b.disabled = running));
 
   $("#output-name").textContent = folderName(state.output_folder);
@@ -290,31 +282,14 @@ document.addEventListener("click", async (event) => {
   if (target.dataset.run) {
     const ready = state.configured && state.account.saved;
     if (target.dataset.run !== "sample" && !ready) return showView("settings");
-    const body = { source: target.dataset.run, watch: Boolean(target.dataset.watch) };
-    // A CSV keeps its own dates unless a range was chosen on purpose.
-    if (target.dataset.run === "tableau" || (target.dataset.run === "file" && rangeEdited)) {
-      [body.start, body.end] = [$("#range-start").value, $("#range-end").value];
-      [body.compare_start, body.compare_end] = compareRange();
-      if (!body.start || !body.end || !body.compare_start || !body.compare_end) return toast("Choose all the dates first.", true);
-    }
     showView("home");
     target.disabled = true;
-    await act("/api/run", body);
+    await act("/api/run", { source: target.dataset.run, watch: Boolean(target.dataset.watch) });
     target.disabled = false;
   }
 });
 
-for (const field of [$("#range-start"), $("#range-end"), $("#compare-select"), $("#compare-start"), $("#compare-end")]) {
-  field.addEventListener("input", () => {
-    rangeEdited = true;
-    render();
-  });
-}
-$("#range-reset").addEventListener("click", () => {
-  rangeEdited = false;
-  $("#compare-select").value = "7";
-  render();
-});
+$("#advanced-form").addEventListener("input", renderDateChoices);
 $("#output-change").addEventListener("click", () => act("/api/output-folder", {}));
 $("#output-open").addEventListener("click", () => act("/api/open", { target: state.output_folder }));
 $("#keep-select").addEventListener("change", (event) => act("/api/settings", { keep_reports: Number(event.target.value) }, "Saved."));
@@ -350,7 +325,10 @@ $("#advanced-form").addEventListener("submit", async (event) => {
     if (at < 1) return toast("Zone lines look like: Hawaii = HST", true);
     timezones[line.slice(0, at).trim()] = line.slice(at + 1).trim().toUpperCase();
   }
-  const body = { timezones, lookback_days: form.lookback_days.value, start_time: form.start_time.value, cutoff_time: form.cutoff_time.value,
+  const body = { timezones, report_mode: form.report_mode.value, report_start: form.report_start.value, report_end: form.report_end.value,
+                 compare_mode: form.compare_mode.value, compare_days: form.compare_days.value,
+                 compare_start: form.compare_start.value, compare_end: form.compare_end.value,
+                 lookback_days: form.lookback_days.value, start_time: form.start_time.value, cutoff_time: form.cutoff_time.value,
                  lightning: form.lightning.value, pepper: form.pepper.value, tableau_view_url: form.tableau_view_url.value,
                  show_browser: form.show_browser.checked };
   await act("/api/settings", body, "Advanced settings saved.");

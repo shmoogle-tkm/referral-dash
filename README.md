@@ -13,20 +13,21 @@ One click:
    downloads the detail crosstab.
 2. **Renders** area, district, zone and mission dashboards.
 3. **Renders District Summaries** in the Data Hub style, comparing every area
-   with an earlier date range: the week before by default, or any range chosen
-   on the run screen. For August 8 - September 8, the app downloads August 1 -
+   with an earlier date range: the same dates 7 days before by default, or as
+   set under Settings > Advanced. For August 8 - September 8, the app downloads August 1 -
    September 8 once and builds August 1 - September 1 from it, so a mission's
    very first run already has change numbers. Each range is measured as it
-   stood at the end of its range (`period.py`, `engine.rewind`); dashboards
-   count only the report range.
+   stood at the end of its range (`period.py`, `engine.rewind`), and leaves off
+   as many days as Tableau's data trails, so both sides have the same follow-up
+   time. Dashboards count only the report range.
 4. **Cleans up** after itself: only the newest report sets are kept (8 by
    default, changeable on the main screen), and browser caches in
    `%LOCALAPPDATA%\Referral Dash` are pruned. Comparisons come from each run's
    own download, so deleting old report sets loses nothing.
 
-The run screen's dates and comparison choice apply to that run only; they
-default to the last 30 days ending today, compared with the week before
-(Settings > Advanced changes the 30).
+Settings > Advanced sets what reports cover (the last N days, or a date range)
+and what they compare with (N days before, or a date range). The main screen
+shows the result in one line; fixed dates stay until they are changed there.
 
 There is no cloud upload. To share reports, choose an output folder that
 Google Drive for desktop, OneDrive, or a shared drive already syncs.

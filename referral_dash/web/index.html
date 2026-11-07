@@ -34,27 +34,7 @@
           <p class="eyebrow" id="run-eyebrow">This week</p>
           <h1 id="run-title">Make this week's reports</h1>
           <p class="lede" id="run-lede">Signs in to Tableau, downloads your referrals, and makes every dashboard and district summary.</p>
-          <div class="range" id="range">
-            <div class="range-fields">
-              <label>From<input id="range-start" type="date"></label>
-              <span class="range-dash" aria-hidden="true">–</span>
-              <label>To<input id="range-end" type="date"></label>
-            </div>
-            <label class="compare-choice">Compare with
-              <select id="compare-select">
-                <option value="7">The week before</option>
-                <option value="14">2 weeks before</option>
-                <option value="28">4 weeks before</option>
-                <option value="custom">Dates I choose</option>
-              </select>
-            </label>
-            <div class="range-fields" id="compare-fields" hidden>
-              <label>Compare from<input id="compare-start" type="date"></label>
-              <span class="range-dash" aria-hidden="true">–</span>
-              <label>Compare to<input id="compare-end" type="date"></label>
-            </div>
-            <p class="range-note"><span id="range-note"></span> <button class="link-button" id="range-reset" hidden>Back to the last 30 days</button></p>
-          </div>
+          <p class="plan-line" id="plan-line"></p>
           <button class="run-button" id="run-button" data-run="tableau">Run now</button>
           <div class="run-alternatives">
             <button class="link-button" data-run="file">Use a CSV I downloaded</button>
@@ -165,8 +145,26 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 15.4-6-6L7.4 8l4.6 4.6L16.6 8 18 9.4l-6 6Z"/></svg>
           </summary>
           <form id="advanced-form">
+            <fieldset class="date-choice">
+              <legend>What the reports cover</legend>
+              <label class="choice"><input type="radio" name="report_mode" value="days"><span>The last</span><input class="days-input" name="lookback_days" type="number" min="1" max="365"><span>days, ending today</span></label>
+              <label class="choice"><input type="radio" name="report_mode" value="range"><span>A date range</span></label>
+              <div class="date-pair" data-mode="report_mode">
+                <label>From<input name="report_start" type="date"></label>
+                <label>To<input name="report_end" type="date"></label>
+              </div>
+            </fieldset>
+            <fieldset class="date-choice">
+              <legend>What the change arrows compare with</legend>
+              <label class="choice"><input type="radio" name="compare_mode" value="days"><span>The same dates</span><input class="days-input" name="compare_days" type="number" min="1" max="365"><span>days before</span></label>
+              <label class="choice"><input type="radio" name="compare_mode" value="range"><span>A date range</span></label>
+              <div class="date-pair" data-mode="compare_mode">
+                <label>From<input name="compare_start" type="date"></label>
+                <label>To<input name="compare_end" type="date"></label>
+              </div>
+            </fieldset>
+            <p class="advanced-note" id="dates-preview"></p>
             <div class="fields">
-              <label>Default days of referrals<input name="lookback_days" type="number" min="1" max="365"></label>
               <label>Lightning under (minutes)<input name="lightning" type="number" min="0" max="1440"></label>
               <label>Morning begins<input name="start_time" type="time"></label>
               <label>Night begins<input name="cutoff_time" type="time"></label>

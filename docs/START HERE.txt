@@ -25,14 +25,14 @@ District Summaries show each area's growth or decline compared with the week
 before, starting with your very first run.
 
 CHOOSING DATES
-The From and To dates on the main screen set what the reports cover. They start
-as the last 30 days ending today, and go back to that the next time you open
-the app. For August 8 to September 8, the arrows compare with August 1 to
-September 1. A past range shows numbers as they stood on its end date.
-
-"Compare with" changes what the arrows compare against: the week before,
-2 or 4 weeks before, or any dates you choose. Like From and To, it applies to
-that run and goes back to the week before afterward.
+Reports cover the last 30 days ending today, compared with the same dates 7 days
+before. The main screen shows the dates in the line above Run now. To change
+them, open Settings > Advanced:
+- What the reports cover: the last so many days, or a date range.
+- What the change arrows compare with: so many days before, or a date range.
+For August 8 to September 8 compared 7 days before, the arrows compare with
+August 1 to September 1. A past range shows numbers as they stood on its end
+date. A date range stays set until you change it back.
 
 WHERE REPORTS GO
 - Reports are saved in Documents\Referral Dash reports. Click "Change" on the
@@ -51,7 +51,7 @@ IF SOMETHING GOES WRONG
   sign-in there and Referral Dash carries on.
 - No Chrome or Edge window can open: install or update Microsoft Edge.
 - Already downloaded a CSV yourself? Click "Use a CSV I downloaded". To get
-  the change arrows, set the dates first, and make sure your CSV also covers
-  the dates you compare with.
-- Settings > Advanced has the rarely needed options (default days of referrals,
+  the change arrows, choose a date range in Settings > Advanced, and make sure
+  your CSV also covers the dates you compare with.
+- Settings > Advanced has the rarely needed options (report dates and comparison,
   response-time hours, icons, zones in another time zone).

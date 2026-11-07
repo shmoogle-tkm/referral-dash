@@ -4,7 +4,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 VERSION = "2.2.0"
@@ -16,7 +16,11 @@ DEFAULT_TABLEAU_VIEW = ("https://prod-useast-b.online.tableau.com/t/churchofjesu
 DEFAULTS = {"mission": "Your Mission", "lightning": 5, "pepper": 20,
             "start_time": "06:30", "cutoff_time": "22:00", "timezones": {"default": "UTC"},
             "tableau_view_url": DEFAULT_TABLEAU_VIEW, "lookback_days": 30,
-            "show_browser": False, "output_folder": "", "keep_reports": 8}
+            "show_browser": False, "output_folder": "", "keep_reports": 8,
+            # What reports cover: the last `lookback_days` days, or fixed dates.
+            "report_mode": "days", "report_start": "", "report_end": "",
+            # What the change arrows compare with: the same range `compare_days` earlier, or fixed dates.
+            "compare_mode": "days", "compare_days": 7, "compare_start": "", "compare_end": ""}
 # The settings that change the numbers; a report's run-summary.json records them.
 METRIC_KEYS = ("mission", "start_time", "cutoff_time", "timezones")
 # Retired settings, dropped when an older settings file is read.
@@ -72,6 +76,22 @@ def validate_settings(data):
     result["timezones"] = {str(k).strip().casefold(): v for k, v in zones.items()}
     if any(v not in TIMEZONES for v in zones.values()):
         raise ValueError("Select one of the supported time zones.")
+    for mode, first, last, label in (("report_mode", "report_start", "report_end", "report"),
+                                     ("compare_mode", "compare_start", "compare_end", "comparison")):
+        if result[mode] not in ("days", "range"):
+            raise ValueError(f"Choose how the {label} dates are set.")
+        for key in (first, last):
+            result[key] = str(result[key] or "").strip()
+            if result[key]:
+                try:
+                    date.fromisoformat(result[key])
+                except ValueError as error:
+                    raise ValueError(f"Choose valid {label} dates.") from error
+        if result[mode] == "range" and not (result[first] and result[last]):
+            raise ValueError(f"Choose both a start and an end date for the {label}.")
+    result["compare_days"] = int(result["compare_days"])
+    if not 1 <= result["compare_days"] <= 365:
+        raise ValueError("Compare with 1 to 365 days before.")
     result["lookback_days"] = int(result["lookback_days"])
     if not 1 <= result["lookback_days"] <= 365:
         raise ValueError("Download between 1 and 365 days of referrals.")

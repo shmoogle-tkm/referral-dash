@@ -25,6 +25,8 @@ LESSON_COLUMN = "First Lesson Date"
 DAY_FORMAT = "%m/%d/%Y"
 # A hand-made export counts as reaching back to the comparison range if it starts this close to it.
 COVERAGE_GRACE = timedelta(days=2)
+# Tableau's data trails by a few days; a longer gap just means the range ends in a quiet spell.
+MAX_DATA_LAG_DAYS = 7
 
 
 def _parses(value, pattern):
@@ -148,7 +150,11 @@ def read_export(filename, settings, period=None, baseline_covered=False):
         mission = _mission([row for row, _ in current], settings, period.cutoff)
         # A partly covered comparison range would invent declines, so it counts only when fully present.
         if baseline_covered or min(day for _, day in kept) <= period.baseline_start + COVERAGE_GRACE:
-            earlier = measured(period.baseline_start, period.baseline_end, period.baseline_cutoff)
+            # The newest rows in the report are days old because Tableau trails; leave the same days off the
+            # comparison, or its brand-new referrals with no follow-up yet would make it look worse.
+            lag = min((period.end - max(day for _, day in current)).days, MAX_DATA_LAG_DAYS)
+            last = max(period.baseline_start, period.baseline_end - timedelta(days=lag))
+            earlier = measured(period.baseline_start, last, period.baseline_cutoff)
             if earlier:
                 baseline = _mission([row for row, _ in earlier], settings, period.baseline_cutoff)
     days = [day for _, day in current]
@@ -206,7 +212,7 @@ def generate_reports(filename, output_parent, settings, progress=lambda message,
         template.buildImage(title, group.median_response_time, group.percent_found,
                             group.total_referrals, group.percent_contacted,
                             group.percent_successful_contact, group.percent_attended_church,
-                            uncontacted, str(candidate))
+                            uncontacted, str(candidate), period.end if period else None)
         image_count += 1
     try:
         render(mission, settings["mission"], "4. Mission", settings["mission"])
@@ -220,7 +226,7 @@ def generate_reports(filename, output_parent, settings, progress=lambda message,
         summary_folder.mkdir()
         for index,(zone,district) in enumerate(districts,1):
             progress(f"Creating district summary: {district}...", image_count, total)
-            render_summary(zone, district, records, previous, label,
+            render_summary(zone, district, records, previous, label, compared,
                            summary_folder / f"{index:02d} - {safe_name(zone + ' - ' + district)}{PICTURE_SUFFIX}")
             image_count += 1
         facts.update({"version": VERSION, "generated_utc": datetime.now(timezone.utc).isoformat(),

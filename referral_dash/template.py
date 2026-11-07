@@ -30,7 +30,8 @@ class DashboardTemplate():
         return os.path.dirname(os.path.abspath(__file__))
 
     def buildImage(self, title_name, median_response_time, percent_found, total_referrals,
-                   percent_contacted, percent_successful_contact, percent_attended_church, uncontacted_people_list, output_path):
+                   percent_contacted, percent_successful_contact, percent_attended_church, uncontacted_people_list, output_path,
+                   report_date=None):
         # ======================
         # CONFIG
         # ======================
@@ -257,7 +258,7 @@ class DashboardTemplate():
             draw,
             TITLE_CENTER,
             TITLE_DATA["top"],
-            f'{TITLE_DATA["bottom"]} • {datetime.now().strftime("%m/%d/%y")}',
+            f'{TITLE_DATA["bottom"]} • {(report_date or datetime.now()).strftime("%m/%d/%y")}',
             title_font,
             small_type3_font,
             TEXT_COLOR,

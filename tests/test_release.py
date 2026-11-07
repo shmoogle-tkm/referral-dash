@@ -186,6 +186,21 @@ class ComparisonTests(Isolated):
             mission, _, _ = engine.read_export(target, SETTINGS, make_period(SETTINGS, "2026-10-08", "2026-10-08"))
             self.assertLess(mission.median_response_time, 24 * 60)
 
+    def test_comparison_leaves_off_the_days_tableau_is_behind(self):
+        with tempfile.TemporaryDirectory() as folder:
+            trailing = self.rewrite_sample(folder, lambda rows: [row for row in rows if not row["First Referral Event Date"].startswith(("10/06", "10/07", "10/08"))])
+            # The newest row is Oct 5, three days before the end date, so the comparison stops at Sep 28.
+            self.assertEqual(engine.read_export(trailing, SETTINGS, SAMPLE_PERIOD)[1].total_referrals, 5)
+            # A range the data fully reaches keeps every day of its comparison.
+            self.assertEqual(engine.read_export(SAMPLE, SETTINGS, SAMPLE_PERIOD)[1].total_referrals, 9)
+
+    def test_pictures_are_dated_by_the_report_not_today(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(engine.DashboardTemplate, "buildImage") as build, \
+                patch.object(engine, "render_summary") as summary:
+            engine.generate_reports(SAMPLE, folder, SETTINGS, period=SAMPLE_PERIOD)
+        self.assertEqual(build.call_args.args[-1], date(2026, 10, 8))
+        self.assertEqual(summary.call_args.args[4:6], ("Oct 1, 2026 – Oct 8, 2026", "Sep 24, 2026 – Oct 1, 2026"))
+
     def test_csv_without_the_earlier_week_has_no_comparison(self):
         with tempfile.TemporaryDirectory() as folder:
             only_october = self.rewrite_sample(folder, lambda rows: [row for row in rows if row["First Referral Event Date"].startswith("10/")])
@@ -489,7 +504,7 @@ class AppTests(Isolated):
         self.assertEqual(result["compared_with"], "Sep 24, 2026 – Oct 1, 2026")
         self.assertEqual(result["referrals"], 8)
 
-    def test_chosen_dates_reach_the_download_and_the_report(self):
+    def test_saved_dates_reach_the_download_and_the_report(self):
         from referral_dash.credentials import LoginCredentials
         from referral_dash.settings import load_settings, save_settings
         save_settings({**load_settings(), "mission": "Sample Mission", "output_folder": self.output.name})
@@ -500,35 +515,54 @@ class AppTests(Isolated):
             return SAMPLE
         with patch("referral_dash.tableau.download.download_dashboard", side_effect=download), \
                 patch.object(self.app.credentials, "load_login", return_value=LoginCredentials("a@b.c", "user", "pw")):
-            result = self.finish({"source": "tableau", "start": "2026-10-01", "end": "2026-10-08"})["run"]["result"]
-            default = self.finish({"source": "tableau"})
-        self.assertEqual((seen[0].start, seen[0].end), (date(2026, 10, 1), date(2026, 10, 8)))
-        self.assertEqual(result["period"], "Oct 1, 2026 – Oct 8, 2026")
-        self.assertEqual(result["compared_with"], "Sep 24, 2026 – Oct 1, 2026")
-        self.assertEqual(seen[1].end.isoformat(), default["default_range"][1])  # Dates were not remembered.
-        with patch("referral_dash.tableau.download.download_dashboard", side_effect=download), \
-                patch.object(self.app.credentials, "load_login", return_value=LoginCredentials("a@b.c", "user", "pw")):
-            chosen = self.finish({"source": "tableau", "start": "2026-10-01", "end": "2026-10-08",
-                                  "compare_start": "2026-09-24", "compare_end": "2026-09-27"})["run"]["result"]
-        self.assertEqual(chosen["compared_with"], "Sep 24, 2026 – Sep 27, 2026")
+            today = self.finish({"source": "tableau"})
+            self.assertEqual(self.call("/api/settings", {"report_mode": "range", "report_start": "2026-10-01", "report_end": "2026-10-08"})[0], 200)
+            fixed = self.finish({"source": "tableau"})
+            self.assertEqual(self.call("/api/settings", {"compare_mode": "range", "compare_start": "2026-09-24", "compare_end": "2026-09-27"})[0], 200)
+            chosen = self.finish({"source": "tableau"})
+            self.assertEqual(self.call("/api/settings", {"compare_mode": "days", "compare_days": 3})[0], 200)
+            shifted = self.finish({"source": "tableau"})
+        self.assertEqual(seen[0].baseline_start, seen[0].start - timedelta(days=7))
+        self.assertEqual((seen[1].start, seen[1].end), (date(2026, 10, 1), date(2026, 10, 8)))
+        self.assertEqual(fixed["run"]["result"]["compared_with"], "Sep 24, 2026 – Oct 1, 2026")
+        self.assertEqual(fixed["plan"]["period"], "Oct 1, 2026 – Oct 8, 2026")
+        self.assertEqual(chosen["run"]["result"]["compared_with"], "Sep 24, 2026 – Sep 27, 2026")
         self.assertEqual(seen[2].download_start, date(2026, 9, 24))
+        self.assertEqual((seen[3].baseline_start, seen[3].baseline_end), (date(2026, 9, 28), date(2026, 10, 5)))
+        self.assertIn("compared", today["plan"])
 
-    def test_bad_dates_are_refused_before_a_run_starts(self):
-        from referral_dash.credentials import LoginCredentials
+    def test_the_run_request_cannot_override_the_saved_dates(self):
         from referral_dash.settings import load_settings, save_settings
-        save_settings({**load_settings(), "mission": "Sample Mission"})
-        with patch.object(self.app.credentials, "load_login", return_value=LoginCredentials("a@b.c", "user", "pw")):
-            status, payload = self.call("/api/run", {"source": "tableau", "start": "2026-10-08", "end": "2026-10-01"})
-            self.assertEqual(status, 400)
-            self.assertIn("on or before", payload["error"])
-            status, payload = self.call("/api/run", {"source": "tableau", "start": "2026-10-01", "end": "2099-01-01"})
-            self.assertEqual(status, 400)
-            self.assertIn("future", payload["error"])
-            status, payload = self.call("/api/run", {"source": "tableau", "start": "2026-10-01", "end": "2026-10-08",
-                                                     "compare_start": "2026-09-01", "compare_end": "2026-10-20"})
-            self.assertEqual(status, 400)
-            self.assertIn("must end before", payload["error"])
-        self.assertIsNone(self.call("/api/state")[1]["run"])
+        save_settings({**load_settings(), "mission": "Sample Mission", "output_folder": self.output.name})
+        result = self.finish({"source": "sample", "start": "2020-01-01", "end": "2020-02-01"})["run"]["result"]
+        self.assertEqual(result["period"], "Oct 1, 2026 – Oct 8, 2026")
+
+    def test_impossible_dates_are_refused_when_saving(self):
+        self.call("/api/settings", {"mission": "Sample Mission"})
+        cases = [({"report_mode": "range", "report_start": "2026-10-08", "report_end": "2026-10-01"}, "on or before"),
+                 ({"report_mode": "range", "report_start": "2026-10-01", "report_end": "2099-01-01"}, "future"),
+                 ({"report_mode": "range", "report_start": "2026-10-01"}, "both"),
+                 ({"report_mode": "range", "report_start": "2026-10-01", "report_end": "2026-10-08", "compare_mode": "range",
+                   "compare_start": "2026-09-01", "compare_end": "2026-10-20"}, "must end before"),
+                 ({"compare_days": 0}, "1 to 365")]
+        for body, message in cases:
+            with self.subTest(body=body):
+                status, payload = self.call("/api/settings", body)
+                self.assertEqual(status, 400)
+                self.assertIn(message, payload["error"])
+        state = self.call("/api/state")[1]
+        self.assertEqual(state["settings"]["report_mode"], "days")
+        self.assertEqual(state["settings"]["compare_days"], 7)
+
+    def test_csv_uses_fixed_dates_but_otherwise_is_reported_whole(self):
+        from referral_dash.settings import load_settings, save_settings
+        save_settings({**load_settings(), "mission": "Sample Mission", "output_folder": self.output.name})
+        with patch.object(self.controller, "ask_ui", return_value=str(SAMPLE)):
+            whole = self.finish({"source": "file"})["run"]["result"]
+            self.call("/api/settings", {"report_mode": "range", "report_start": "2026-10-01", "report_end": "2026-10-08"})
+            fixed = self.finish({"source": "file"})["run"]["result"]
+        self.assertEqual((whole["referrals"], whole["compared_with"]), (16, None))
+        self.assertEqual((fixed["referrals"], fixed["compared_with"]), (8, "Sep 24, 2026 – Oct 1, 2026"))
 
     def test_lost_window_is_reopened_then_falls_back_to_the_default_browser(self):
         app = self.app

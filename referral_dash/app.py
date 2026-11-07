@@ -26,7 +26,7 @@ from . import credentials
 from .cleanup import prune_app_data, prune_reports, report_runs
 from .engine import generate_reports
 from .district_summary import period_label
-from .period import default_range, make_period
+from .period import make_period, settings_period
 from .settings import (TIMEZONES, VERSION, app_directory, data_directory, is_configured, load_settings,
                        save_settings, suggested_timezone, validate_settings)
 
@@ -82,8 +82,18 @@ class Controller:
             "output_folder": output,
             "account": {"email": login.email, "username": login.username, "saved": login.complete},
             "run": run, "recent": self.recent(output),
-            "default_range": [day.isoformat() for day in default_range(settings)],
+            "plan": self.plan(settings),
         }
+
+    @staticmethod
+    def plan(settings):
+        """What the next run will cover, for the main screen."""
+        try:
+            period = settings_period(settings)
+        except ValueError as error:
+            return {"error": str(error)}
+        return {"period": period_label(period.start.isoformat(), period.end.isoformat()),
+                "compared": period_label(period.baseline_start.isoformat(), period.baseline_end.isoformat())}
 
     def recent(self, output):
         runs = []
@@ -116,8 +126,11 @@ class Controller:
     def save_settings(self, body):
         current = load_settings()
         allowed = {"mission", "lightning", "pepper", "start_time", "cutoff_time", "timezones",
-                   "tableau_view_url", "lookback_days", "show_browser", "keep_reports"}
-        return save_settings({**current, **{k: v for k, v in body.items() if k in allowed}})
+                   "tableau_view_url", "lookback_days", "show_browser", "keep_reports", "report_mode",
+                   "report_start", "report_end", "compare_mode", "compare_days", "compare_start", "compare_end"}
+        merged = validate_settings({**current, **{k: v for k, v in body.items() if k in allowed}})
+        settings_period(merged)  # Refuse dates that could not run, while the person is still on the form.
+        return save_settings(merged)
 
     def save_account(self, body):
         credentials.save_login(str(body.get("email", "")), str(body.get("username", "")), str(body.get("password", "")))
@@ -135,11 +148,10 @@ class Controller:
         return answer.get()
 
     # ----- runs -----
-    def start_run(self, source, watch=False, start=None, end=None, compare_start=None, compare_end=None):
+    def start_run(self, source, watch=False):
         """`watch` shows the Tableau browser for this run only, e.g. to see why sign-in failed.
 
-        The dates apply to this run only, so next week's run is not stuck on an old range.
-        A CSV without them is reported whole, since only its author knows what it covers.
+        A CSV is reported whole unless fixed report dates are set, since only its author knows what it covers.
         """
         settings = load_settings()
         if watch:
@@ -151,10 +163,10 @@ class Controller:
             if source == "tableau" and not login.complete:
                 raise ValueError("Open Settings and save the Church account used for Tableau.")
         if source == "sample":
-            period = make_period(settings, *SAMPLE_RANGE)
+            # The sample's own dates, so "Try sample data" looks the same whatever the settings say.
+            period = make_period({**settings, "compare_days": 7}, *SAMPLE_RANGE)
         else:
-            period = (make_period(settings, start, end, compare_start, compare_end)
-                      if source == "tableau" or start or end else None)
+            period = settings_period(settings) if source == "tableau" or settings["report_mode"] == "range" else None
         filename = None
         if source == "file":
             filename = self.ask_ui("file")
@@ -311,9 +323,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/account": lambda: c.save_account(body),
             "/api/account/forget": credentials.forget_login,
             "/api/output-folder": c.pick_output_folder,
-            "/api/run": lambda: c.start_run(str(body.get("source", "tableau")), bool(body.get("watch")),
-                                            body.get("start"), body.get("end"),
-                                            body.get("compare_start"), body.get("compare_end")),
+            "/api/run": lambda: c.start_run(str(body.get("source", "tableau")), bool(body.get("watch"))),
             "/api/open": lambda: c.open_target(str(body.get("target", ""))),
         }
         action = actions.get(self.path)

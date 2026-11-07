@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from .group import TZ_LOOKUP
 
-WEEK = timedelta(days=7)
 MAX_DAYS = 365
 
 
@@ -59,8 +58,8 @@ class Period:
 
 
 def make_period(settings, start=None, end=None, compare_start=None, compare_end=None, now=None):
-    """Validate the chosen ranges. Missing report dates use the default range; a missing
-    comparison uses the same range one week earlier."""
+    """Validate the ranges. Missing report dates use the default range; a missing
+    comparison uses the same range `compare_days` earlier."""
     now = now or datetime.now(timezone.utc)
     zone = mission_zone(settings)
     default_start, today = default_range(settings, now)
@@ -69,11 +68,19 @@ def make_period(settings, start=None, end=None, compare_start=None, compare_end=
     _check_range(start, end, today, "report")
     if bool(compare_start) != bool(compare_end):
         raise ValueError("Choose both a start and an end date to compare with.")
-    baseline_start = _day(compare_start, "comparison start") if compare_start else start - WEEK
-    baseline_end = _day(compare_end, "comparison end") if compare_end else end - WEEK
+    earlier = timedelta(days=settings["compare_days"])
+    baseline_start = _day(compare_start, "comparison start") if compare_start else start - earlier
+    baseline_end = _day(compare_end, "comparison end") if compare_end else end - earlier
     _check_range(baseline_start, baseline_end, today, "comparison")
     if baseline_end >= end:
         raise ValueError("The comparison dates must end before the report's end date.")
     end_of_day = datetime.combine(end + timedelta(days=1), time.min, tzinfo=zone) - timedelta(seconds=1)
     return Period(start, end, min(end_of_day.astimezone(timezone.utc), now.astimezone(timezone.utc)), zone,
                   baseline_start, baseline_end)
+
+
+def settings_period(settings, now=None):
+    """The period the saved date settings describe."""
+    report = (settings["report_start"], settings["report_end"]) if settings["report_mode"] == "range" else (None, None)
+    compare = (settings["compare_start"], settings["compare_end"]) if settings["compare_mode"] == "range" else (None, None)
+    return make_period(settings, *report, *compare, now=now)

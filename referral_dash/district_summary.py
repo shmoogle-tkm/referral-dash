@@ -139,7 +139,7 @@ def period_label(first_day, last_day):
     return f"{short(first_day)} – {short(last_day)}"
 
 
-def render_summary(zone, district, records, previous, period, output):
+def render_summary(zone, district, records, previous, period, compared, output):
     current = {key(r): r for r in records}
     old = {key(r): r for r in previous["areas"]} if previous else {}
     identities = sorted({k for k in (*current, *old) if k[:2] == (zone, district)}, key=lambda k: k[2].casefold())
@@ -152,7 +152,12 @@ def render_summary(zone, district, records, previous, period, output):
     draw.text((PAGE_PADDING + 34, 55), title, font=_fit(draw, title, 34, 1180, serif=True), fill=TEXT)
     _text(draw, (PAGE_PADDING + 34, 99), f"{zone.upper()} ZONE", 11, MUTED)
     draw.rounded_rectangle((1278, 48, 1564, 102), 9, fill=(17, 27, 37), outline=(50, 64, 78), width=1)
-    draw.text((1421, 75), period, font=_fit(draw, period, 14, 262), fill=(216, 222, 229), anchor="mm")
+    if compared:
+        draw.text((1421, 65), period, font=_fit(draw, period, 14, 262), fill=(216, 222, 229), anchor="mm")
+        versus = f"vs {compared}"
+        draw.text((1421, 86), versus, font=_fit(draw, versus, 12, 262), fill=MUTED, anchor="mm")
+    else:
+        draw.text((1421, 75), period, font=_fit(draw, period, 14, 262), fill=(216, 222, 229), anchor="mm")
 
     metric_width = (WIDTH - PAGE_PADDING * 2 - AREA_WIDTH - METRIC_GAP * len(METRICS)) / len(METRICS)
     _text(draw, (PAGE_PADDING + 18, 150), "AREA", 12, HEADING, bold=True)
