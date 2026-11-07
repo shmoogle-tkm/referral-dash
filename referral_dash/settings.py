@@ -7,7 +7,7 @@ import time
 from datetime import date, datetime
 from pathlib import Path
 
-VERSION = "2.2.1"
+VERSION = "2.2.2"
 APP_NAME = "Referral Dash"
 TIMEZONES = ["UTC", "EST", "CST", "MST", "MST_NO_DST", "PST", "AKST", "HST"]
 # The mission finding workbook used by the Referral Care Data Hub.

@@ -29,7 +29,7 @@ Reports cover the last 30 days ending today, compared with the same dates 7 days
 before. The main screen shows the dates in the line above Run now. To change
 them, open Settings > Advanced:
 - What the reports cover: the past so many days, or a date range.
-- What the change arrows compare with: so many days before, or a date range.
+- Compare to: so many days before, or a date range.
 For August 8 to September 8 compared 7 days before, the arrows compare with
 August 1 to September 1. A past range shows numbers as they stood on its end
 date. A date range stays set until you change it back.
