@@ -6,7 +6,7 @@ import json
 import re
 import shutil
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from .group import Mission, ReferralPerson, DATE_FORMAT
 from .template import PICTURE_SUFFIX, DashboardTemplate
@@ -21,7 +21,10 @@ REQUIRED_COLUMNS = ["Full Name", "Latest Zone Name", "Latest District Name",
 TIMED_COLUMNS = DATE_COLUMNS[:2]
 MAX_SKIPPED_SHARE = 0.10
 PERIOD_COLUMN = "Event Date Selected"
+LESSON_COLUMN = "First Lesson Date"
 DAY_FORMAT = "%m/%d/%Y"
+# A hand-made export counts as reaching back to the comparison range if it starts this close to it.
+COVERAGE_GRACE = timedelta(days=2)
 
 
 def _parses(value, pattern):
@@ -32,7 +35,53 @@ def _parses(value, pattern):
         return False
 
 
-def read_export(filename, settings):
+def _happened(value, cutoff, day):
+    """Whether a timestamp (UTC) or a date-only value had happened by the cutoff."""
+    if _parses(value, DATE_FORMAT):
+        return datetime.strptime(value, DATE_FORMAT).replace(tzinfo=timezone.utc) <= cutoff
+    return _parses(value, DAY_FORMAT) and datetime.strptime(value, DAY_FORMAT).date() <= day
+
+
+def _taught_by(row, cutoff, day):
+    """Tableau dates "taught" by the Sunday ending its week; First Lesson Date gives the actual day."""
+    taught = row[DATE_COLUMNS[3]]
+    if not taught:
+        return False
+    if _parses(taught, DATE_FORMAT):
+        return _happened(taught, cutoff, day)
+    week_end = day + timedelta(days=6 - day.weekday())
+    if not _parses(taught, DAY_FORMAT) or datetime.strptime(taught, DAY_FORMAT).date() > week_end:
+        return False
+    lesson = row.get(LESSON_COLUMN, "")
+    return _happened(lesson, cutoff, day) if _parses(lesson, DATE_FORMAT) or _parses(lesson, DAY_FORMAT) else True
+
+
+def rewind(row, cutoff, zone):
+    """The row as it stood at `cutoff`, or None if the referral had not arrived yet."""
+    day = cutoff.astimezone(zone).date()
+    if not _happened(row[DATE_COLUMNS[0]], cutoff, day):
+        return None
+    earlier = dict(row)
+    for column in (DATE_COLUMNS[1], DATE_COLUMNS[2], DATE_COLUMNS[4], DATE_COLUMNS[5]):
+        if earlier[column] and not _happened(earlier[column], cutoff, day):
+            earlier[column] = ""
+    if not _taught_by(row, cutoff, day):
+        earlier[DATE_COLUMNS[3]] = ""
+    return earlier
+
+
+def _mission(rows, settings, as_of=None):
+    mission = Mission()
+    for row in rows:
+        mission.add_person(ReferralPerson(row, settings=settings, as_of=as_of))
+    return mission
+
+
+def read_export(filename, settings, period=None, baseline_covered=False):
+    """Return (mission, baseline, facts). Without a period, the whole file is the report and baseline is None.
+
+    `baseline_covered` says the file is known to include the comparison range, as a Tableau download is.
+    """
     raw = Path(filename).read_bytes()
     if len(raw) > 75 * 1024 * 1024:
         raise ValueError("Export is larger than 75 MB. Check the Tableau date range and download again.")
@@ -52,10 +101,8 @@ def read_export(filename, settings):
     if missing:
         raise ValueError("Missing columns: " + ", ".join(missing) + ". Use Mission Finding Detail > Crosstab > Detail > CSV.")
     reader.fieldnames = headers
-    mission = Mission()
-    rows = 0
+    kept = []
     skipped = 0
-    dates = []
     for number, original in enumerate(reader, 2):
         if None in original or any(v is None for v in original.values()):
             raise ValueError(f"Row {number}: column count does not match the header. Re-export the original file.")
@@ -76,21 +123,38 @@ def read_export(filename, settings):
         if not row[DATE_COLUMNS[0]] or any(row[c].casefold() in ("", "null", "(null)") for c in REQUIRED_COLUMNS[:4]):
             skipped += 1
             continue
-        # The Dashboard download is filtered on Event Date Selected, so that range describes it best.
+        # The Dashboard download is filtered on Event Date Selected, so that is the date a row belongs to.
         selected = row.get(PERIOD_COLUMN, "")
-        dates.append(datetime.strptime(selected, DAY_FORMAT) if _parses(selected, DAY_FORMAT)
-                     else datetime.strptime(row[DATE_COLUMNS[0]], DATE_FORMAT))
-        person = ReferralPerson(row, settings=settings)
-        mission.add_person(person)
-        rows += 1
-    if not rows:
+        when = (datetime.strptime(selected, DAY_FORMAT) if _parses(selected, DAY_FORMAT)
+                else datetime.strptime(row[DATE_COLUMNS[0]], DATE_FORMAT))
+        kept.append((row, when.date()))
+    if not kept:
         raise ValueError("This export has no referral rows. Check the mission, date range, and filters in Tableau.")
-    if skipped > MAX_SKIPPED_SHARE * (rows + skipped):
-        raise ValueError(f"{skipped} of {rows + skipped} rows have no area assignment or referral date. "
+    if skipped > MAX_SKIPPED_SHARE * (len(kept) + skipped):
+        raise ValueError(f"{skipped} of {len(kept) + skipped} rows have no area assignment or referral date. "
                          "Check the Tableau filters; this does not look like the Dashboard detail download.")
-    return mission, {"referrals": rows, "skipped_rows": skipped, "first_referral_date": min(dates).strftime("%Y-%m-%d"),
-                     "last_referral_date": max(dates).strftime("%Y-%m-%d"),
-                     "input_sha256": hashlib.sha256(raw).hexdigest()}
+    baseline = None
+    if period is None:
+        current = kept
+        mission = _mission([row for row, _ in current], settings)
+    else:
+        def measured(first, last, cutoff):
+            rows = ((rewind(row, cutoff, period.zone), day) for row, day in kept if first <= day <= last)
+            return [(row, day) for row, day in rows if row]
+        current = measured(period.start, period.end, period.cutoff)
+        if not current:
+            raise ValueError(f"This export has no referrals from {period.start:%b %d, %Y} to {period.end:%b %d, %Y}. "
+                             "Check the dates, or download a file that covers them.")
+        mission = _mission([row for row, _ in current], settings, period.cutoff)
+        # A partly covered comparison range would invent declines, so it counts only when fully present.
+        if baseline_covered or min(day for _, day in kept) <= period.baseline_start + COVERAGE_GRACE:
+            earlier = measured(period.baseline_start, period.baseline_end, period.baseline_cutoff)
+            if earlier:
+                baseline = _mission([row for row, _ in earlier], settings, period.baseline_cutoff)
+    days = [day for _, day in current]
+    return mission, baseline, {"referrals": len(current), "skipped_rows": skipped,
+                               "first_referral_date": min(days).isoformat(), "last_referral_date": max(days).isoformat(),
+                               "input_sha256": hashlib.sha256(raw).hexdigest()}
 
 def safe_name(value):
     name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "-", value).strip(" .")[:95] or "Unnamed"
@@ -98,17 +162,21 @@ def safe_name(value):
         name = "_" + name
     return name
 
-def generate_reports(filename, output_parent, settings, progress=lambda message, done=None, total=None: None, history=None):
-    """Render every report into a new run folder; `history` supplies and keeps comparisons.
+def generate_reports(filename, output_parent, settings, progress=lambda message, done=None, total=None: None,
+                     period=None, baseline_covered=False):
+    """Render every report into a new run folder.
 
-    `progress(message, done, total)` reports each image as it starts.
+    Dashboards cover `period`; District Summaries also compare it with the period's
+    comparison range, from the same file. `progress(message, done, total)` reports each image as it starts.
     """
     settings = validate_settings(settings)
     progress("Checking the export...")
-    mission, facts = read_export(filename, settings)
-    previous = history.previous(facts["input_sha256"]) if history else None
+    mission, baseline, facts = read_export(filename, settings, period, baseline_covered)
+    previous = {"areas": area_records(baseline)} if baseline else None
     records = area_records(mission)
-    period = period_label(facts["first_referral_date"], facts["last_referral_date"])
+    label = (period_label(period.start.isoformat(), period.end.isoformat()) if period
+             else period_label(facts["first_referral_date"], facts["last_referral_date"]))
+    compared = period_label(period.baseline_start.isoformat(), period.baseline_end.isoformat()) if previous else None
     parent = Path(output_parent).resolve()
     if not parent.is_dir():
         raise ValueError("Choose an existing output folder that you can write to.")
@@ -152,7 +220,7 @@ def generate_reports(filename, output_parent, settings, progress=lambda message,
         summary_folder.mkdir()
         for index,(zone,district) in enumerate(districts,1):
             progress(f"Creating district summary: {district}...", image_count, total)
-            render_summary(zone, district, records, previous, period,
+            render_summary(zone, district, records, previous, label,
                            summary_folder / f"{index:02d} - {safe_name(zone + ' - ' + district)}{PICTURE_SUFFIX}")
             image_count += 1
         facts.update({"version": VERSION, "generated_utc": datetime.now(timezone.utc).isoformat(),
@@ -164,7 +232,7 @@ def generate_reports(filename, output_parent, settings, progress=lambda message,
                       "found_percent": mission.percent_found, "at_church_percent": mission.percent_attended_church,
                       "median_response_minutes": mission.median_response_time,
                       "areas":records,"district_summaries":len(districts),
-                      "comparison_generated_utc":previous["generated_utc"] if previous else None})
+                      "period": label, "comparison_period": compared})
         (staging / "run-summary.json").write_text(json.dumps(facts, indent=2), encoding="utf-8")
         staging.rename(final)
     except Exception:
@@ -172,6 +240,4 @@ def generate_reports(filename, output_parent, settings, progress=lambda message,
         if staging.exists():
             shutil.rmtree(staging)
         raise
-    if history:
-        history.save(facts)
     return final, facts

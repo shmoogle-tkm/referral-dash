@@ -1,8 +1,7 @@
 """Keep Referral Dash small on disk: old report sets, old downloads, and browser caches.
 
-Only folders and files this app made are removed. Comparison history lives in
-%LOCALAPPDATA%\\Referral Dash\\history, so deleting old report sets never breaks
-"compared with last week".
+Only folders and files this app made are removed. Each run builds its week-earlier
+comparison from its own download, so deleting old report sets loses nothing.
 """
 import shutil
 import time

@@ -21,8 +21,18 @@ EVERY WEEK
 Open Referral Dash and click Run now. Wait for "Reports are ready", then
 click "Open reports".
 
-District Summaries compare automatically with last week's run. The very first
-run has nothing to compare with yet.
+District Summaries show each area's growth or decline compared with the week
+before, starting with your very first run.
+
+CHOOSING DATES
+The From and To dates on the main screen set what the reports cover. They start
+as the last 30 days ending today, and go back to that the next time you open
+the app. For August 8 to September 8, the arrows compare with August 1 to
+September 1. A past range shows numbers as they stood on its end date.
+
+"Compare with" changes what the arrows compare against: the week before,
+2 or 4 weeks before, or any dates you choose. Like From and To, it applies to
+that run and goes back to the week before afterward.
 
 WHERE REPORTS GO
 - Reports are saved in Documents\Referral Dash reports. Click "Change" on the
@@ -30,7 +40,7 @@ WHERE REPORTS GO
   Google Drive for desktop, OneDrive or a shared drive already syncs.
 - Only the newest 8 report sets are kept; older ones are deleted after each
   run so the folder stays small. Change the number (or pick "all") on the
-  main screen. Deleting old reports never affects the weekly comparison.
+  main screen. Deleting old reports never affects the comparison.
 
 IF SOMETHING GOES WRONG
 - "Tableau has no mission named ...": it suggests the closest name. Click
@@ -40,6 +50,8 @@ IF SOMETHING GOES WRONG
 - Authenticator prompts: a browser window opens by itself; approve the
   sign-in there and Referral Dash carries on.
 - No Chrome or Edge window can open: install or update Microsoft Edge.
-- Already downloaded a CSV yourself? Click "Use a CSV I downloaded".
-- Settings > Advanced has the rarely needed options (days of referrals,
+- Already downloaded a CSV yourself? Click "Use a CSV I downloaded". To get
+  the change arrows, set the dates first, and make sure your CSV also covers
+  the dates you compare with.
+- Settings > Advanced has the rarely needed options (default days of referrals,
   response-time hours, icons, zones in another time zone).

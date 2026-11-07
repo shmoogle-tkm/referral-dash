@@ -34,6 +34,27 @@
           <p class="eyebrow" id="run-eyebrow">This week</p>
           <h1 id="run-title">Make this week's reports</h1>
           <p class="lede" id="run-lede">Signs in to Tableau, downloads your referrals, and makes every dashboard and district summary.</p>
+          <div class="range" id="range">
+            <div class="range-fields">
+              <label>From<input id="range-start" type="date"></label>
+              <span class="range-dash" aria-hidden="true">–</span>
+              <label>To<input id="range-end" type="date"></label>
+            </div>
+            <label class="compare-choice">Compare with
+              <select id="compare-select">
+                <option value="7">The week before</option>
+                <option value="14">2 weeks before</option>
+                <option value="28">4 weeks before</option>
+                <option value="custom">Dates I choose</option>
+              </select>
+            </label>
+            <div class="range-fields" id="compare-fields" hidden>
+              <label>Compare from<input id="compare-start" type="date"></label>
+              <span class="range-dash" aria-hidden="true">–</span>
+              <label>Compare to<input id="compare-end" type="date"></label>
+            </div>
+            <p class="range-note"><span id="range-note"></span> <button class="link-button" id="range-reset" hidden>Back to the last 30 days</button></p>
+          </div>
           <button class="run-button" id="run-button" data-run="tableau">Run now</button>
           <div class="run-alternatives">
             <button class="link-button" data-run="file">Use a CSV I downloaded</button>
@@ -145,7 +166,7 @@
           </summary>
           <form id="advanced-form">
             <div class="fields">
-              <label>Days of referrals<input name="lookback_days" type="number" min="1" max="365"></label>
+              <label>Default days of referrals<input name="lookback_days" type="number" min="1" max="365"></label>
               <label>Lightning under (minutes)<input name="lightning" type="number" min="0" max="1440"></label>
               <label>Morning begins<input name="start_time" type="time"></label>
               <label>Night begins<input name="cutoff_time" type="time"></label>
@@ -154,7 +175,6 @@
               <label class="wide">Tableau workbook link<input name="tableau_view_url" required></label>
               <label class="check-row wide"><input name="show_browser" type="checkbox">Always show the browser while downloading</label>
             </div>
-            <p class="advanced-note">Changing the mission, time zones, or morning/night times starts a fresh comparison history.</p>
             <div class="form-foot"><span></span><button class="button" type="submit">Save advanced settings</button></div>
           </form>
         </details>

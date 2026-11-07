@@ -13,14 +13,20 @@ One click:
    downloads the detail crosstab.
 2. **Renders** area, district, zone and mission dashboards.
 3. **Renders District Summaries** in the Data Hub style, comparing every area
-   with the newest earlier run at least five days old (otherwise the newest
-   earlier run). Comparisons come from saved area aggregates in
-   `%LOCALAPPDATA%\Referral Dash\history`, scoped to the mission, time zones
-   and day window.
+   with an earlier date range: the week before by default, or any range chosen
+   on the run screen. For August 8 - September 8, the app downloads August 1 -
+   September 8 once and builds August 1 - September 1 from it, so a mission's
+   very first run already has change numbers. Each range is measured as it
+   stood at the end of its range (`period.py`, `engine.rewind`); dashboards
+   count only the report range.
 4. **Cleans up** after itself: only the newest report sets are kept (8 by
    default, changeable on the main screen), and browser caches in
-   `%LOCALAPPDATA%\Referral Dash` are pruned. Comparison history is separate,
-   so deleting old report sets never breaks "compared with last week".
+   `%LOCALAPPDATA%\Referral Dash` are pruned. Comparisons come from each run's
+   own download, so deleting old report sets loses nothing.
+
+The run screen's dates and comparison choice apply to that run only; they
+default to the last 30 days ending today, compared with the week before
+(Settings > Advanced changes the 30).
 
 There is no cloud upload. To share reports, choose an output folder that
 Google Drive for desktop, OneDrive, or a shared drive already syncs.
@@ -40,7 +46,7 @@ first-time setup; rarely needed options sit under Settings > Advanced.
 | `referral_dash/tableau/` | Sign-in, Dashboard view recovery, download (adapted from the Data Hub) |
 | `referral_dash/engine.py` | Export validation and complete, isolated report runs |
 | `referral_dash/district_summary.py` | District Summary renderer |
-| `referral_dash/history.py` | Automatic comparison baselines |
+| `referral_dash/period.py` | The report's date range and the range it compares with |
 | `referral_dash/cleanup.py` | Keeps the newest report sets; prunes browser caches |
 | `referral_dash/credentials.py` | Church account in Windows Credential Manager |
 
@@ -53,7 +59,7 @@ py -m venv .venv
 .\.venv\Scripts\python.exe -m referral_dash
 ```
 
-Set `REFERRAL_DASH_HOME` to use a scratch settings/history folder, and
+Set `REFERRAL_DASH_HOME` to use a scratch settings folder, and
 `REFERRAL_DASH_NO_WINDOW=1` to print the URL instead of opening a window.
 
 ## Release

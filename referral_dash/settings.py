@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 APP_NAME = "Referral Dash"
 TIMEZONES = ["UTC", "EST", "CST", "MST", "MST_NO_DST", "PST", "AKST", "HST"]
 # The mission finding workbook used by the Referral Care Data Hub.
@@ -17,7 +17,7 @@ DEFAULTS = {"mission": "Your Mission", "lightning": 5, "pepper": 20,
             "start_time": "06:30", "cutoff_time": "22:00", "timezones": {"default": "UTC"},
             "tableau_view_url": DEFAULT_TABLEAU_VIEW, "lookback_days": 30,
             "show_browser": False, "output_folder": "", "keep_reports": 8}
-# Only these settings change the numbers, so only these must match between compared runs.
+# The settings that change the numbers; a report's run-summary.json records them.
 METRIC_KEYS = ("mission", "start_time", "cutoff_time", "timezones")
 # Retired settings, dropped when an older settings file is read.
 RETIRED_KEYS = ("tableau_sso_url", "drive_folder", "drive_folder_name")
@@ -87,11 +87,6 @@ def validate_settings(data):
     if not 0 <= result["keep_reports"] <= 100:
         raise ValueError("Keep between 1 and 100 report sets, or 0 to keep them all.")
     return result
-
-
-def metric_settings(settings):
-    validated = validate_settings(settings)
-    return {key: validated[key] for key in METRIC_KEYS}
 
 
 def is_configured(settings):

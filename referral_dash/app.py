@@ -25,7 +25,8 @@ from urllib.request import Request, urlopen
 from . import credentials
 from .cleanup import prune_app_data, prune_reports, report_runs
 from .engine import generate_reports
-from .history import History
+from .district_summary import period_label
+from .period import default_range, make_period
 from .settings import (TIMEZONES, VERSION, app_directory, data_directory, is_configured, load_settings,
                        save_settings, suggested_timezone, validate_settings)
 
@@ -33,6 +34,8 @@ HOST = "127.0.0.1"
 WEB_ROOT = app_directory() / "web"
 FONT_ROOT = app_directory() / "fonts"
 SAMPLE = app_directory() / "sample-data" / "sample-referrals.csv"
+# The sample's rows run from Sep 24; this range leaves the week before it for the comparison.
+SAMPLE_RANGE = ("2026-10-01", "2026-10-08")
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 IDLE_SECONDS = 150
 # A window that has not loaded the page by then is reopened; the last try uses the default browser.
@@ -79,6 +82,7 @@ class Controller:
             "output_folder": output,
             "account": {"email": login.email, "username": login.username, "saved": login.complete},
             "run": run, "recent": self.recent(output),
+            "default_range": [day.isoformat() for day in default_range(settings)],
         }
 
     def recent(self, output):
@@ -91,9 +95,22 @@ class Controller:
             runs.append({"folder": str(folder), "name": folder.name, "generated_utc": facts.get("generated_utc"),
                          "referrals": facts.get("referrals"), "images": facts.get("images"),
                          "district_summaries": facts.get("district_summaries"),
-                         "compared_with": facts.get("comparison_generated_utc"),
+                         "period": facts.get("period") or self._legacy_period(facts),
+                         "compared_with": facts.get("comparison_period") or self._legacy_comparison(facts),
                          "mission": facts.get("settings", {}).get("mission")})
         return runs
+
+    @staticmethod
+    def _legacy_period(facts):
+        """Reports made before 2.2 only recorded the dates of their rows."""
+        first, last = facts.get("first_referral_date"), facts.get("last_referral_date")
+        return period_label(first, last) if first and last else None
+
+    @staticmethod
+    def _legacy_comparison(facts):
+        """Reports made before 2.2 compared with an earlier run, recorded by when it was made."""
+        made = facts.get("comparison_generated_utc")
+        return f"run of {datetime.fromisoformat(made):%b %d}" if made else None
 
     # ----- settings -----
     def save_settings(self, body):
@@ -118,8 +135,12 @@ class Controller:
         return answer.get()
 
     # ----- runs -----
-    def start_run(self, source, watch=False):
-        """`watch` shows the Tableau browser for this run only, e.g. to see why sign-in failed."""
+    def start_run(self, source, watch=False, start=None, end=None, compare_start=None, compare_end=None):
+        """`watch` shows the Tableau browser for this run only, e.g. to see why sign-in failed.
+
+        The dates apply to this run only, so next week's run is not stuck on an old range.
+        A CSV without them is reported whole, since only its author knows what it covers.
+        """
         settings = load_settings()
         if watch:
             settings = {**settings, "show_browser": True}
@@ -129,6 +150,11 @@ class Controller:
                 raise ValueError("Open Settings and enter your mission name exactly as Tableau shows it.")
             if source == "tableau" and not login.complete:
                 raise ValueError("Open Settings and save the Church account used for Tableau.")
+        if source == "sample":
+            period = make_period(settings, *SAMPLE_RANGE)
+        else:
+            period = (make_period(settings, start, end, compare_start, compare_end)
+                      if source == "tableau" or start or end else None)
         filename = None
         if source == "file":
             filename = self.ask_ui("file")
@@ -143,7 +169,7 @@ class Controller:
                         "steps": [{"id": i, "label": label, "state": "pending", "detail": ""} for i, label in STEPS]}
             if source != "tableau":
                 self._step("download", "done", "Sample data" if source == "sample" else Path(filename).name)
-        threading.Thread(target=self._work, args=(source, filename, settings, login), daemon=True).start()
+        threading.Thread(target=self._work, args=(source, filename, settings, login, period), daemon=True).start()
         return self.run["id"]
 
     def _step(self, step_id, state, detail=None):
@@ -166,7 +192,7 @@ class Controller:
         with self.lock:
             self.run["attention"] = message
 
-    def _work(self, source, filename, settings, login):
+    def _work(self, source, filename, settings, login, period):
         current = "download"
         try:
             output = sample_folder() if source == "sample" else Path(settings["output_folder"] or default_output_folder())
@@ -175,7 +201,7 @@ class Controller:
                 self._step("download", "active")
                 from .tableau.download import download_dashboard
                 downloads = data_directory() / "downloads"
-                filename = download_dashboard(settings, login, downloads, lambda m: self._progress(m), self._attention)
+                filename = download_dashboard(settings, login, downloads, period, lambda m: self._progress(m), self._attention)
                 for old in sorted(downloads.glob("tableau_export_*.csv"))[:-KEEP_DOWNLOADS]:
                     old.unlink(missing_ok=True)
                 self._step("download", "done", "Downloaded from Tableau")
@@ -183,9 +209,6 @@ class Controller:
             elif source == "sample":
                 filename = SAMPLE
                 settings = validate_settings({**settings, "mission": "Sample Mission"})
-            history = None if source == "sample" else History(settings)
-            if history:
-                history.import_reports(output)
             current = "render"
             self._step("render", "active")
             base = 35 if source == "tableau" else 5
@@ -197,21 +220,21 @@ class Controller:
                     self._step("summaries", "active")
                 fraction = done / total if done is not None and total else None
                 self._progress(message, base + span * fraction if fraction is not None else None)
-            folder, facts = generate_reports(filename, output, settings, progress, history=history)
+            folder, facts = generate_reports(filename, output, settings, progress, period=period,
+                                             baseline_covered=source == "tableau")
             skipped = facts["skipped_rows"]
             self._step("render", "done", f"{facts['images'] - facts['district_summaries']} dashboards" +
                        (f" · {skipped} row{'s' * (skipped != 1)} without an area left out" if skipped else ""))
-            compared = facts["comparison_generated_utc"]
+            compared = facts["comparison_period"]
             self._step("summaries", "done", f"{facts['district_summaries']} districts" +
-                       (f" · vs {datetime.fromisoformat(compared):%b %d}" if compared else " · first run, no comparison"))
-            # Comparisons come from saved history, so old report sets can go without losing "vs last week".
+                       (f" · vs {compared}" if compared else " · comparison dates not in this file"))
             removed = prune_reports(output, 1 if source == "sample" else settings["keep_reports"])
             with self.lock:
                 self.run.update(status="done", percent=100, finished=datetime.now(timezone.utc).isoformat(),
                                 message="Finished", result={"folder": str(folder), "images": facts["images"],
                                 "dashboards": facts["images"] - facts["district_summaries"],
                                 "summaries": facts["district_summaries"], "referrals": facts["referrals"],
-                                "compared_with": compared, "removed": 0 if source == "sample" else len(removed)})
+                                "period": facts["period"], "compared_with": compared, "removed": 0 if source == "sample" else len(removed)})
         except Exception as exc:
             traceback.print_exc()
             self._step(current, "failed", "")
@@ -288,7 +311,9 @@ class Handler(BaseHTTPRequestHandler):
             "/api/account": lambda: c.save_account(body),
             "/api/account/forget": credentials.forget_login,
             "/api/output-folder": c.pick_output_folder,
-            "/api/run": lambda: c.start_run(str(body.get("source", "tableau")), bool(body.get("watch"))),
+            "/api/run": lambda: c.start_run(str(body.get("source", "tableau")), bool(body.get("watch")),
+                                            body.get("start"), body.get("end"),
+                                            body.get("compare_start"), body.get("compare_end")),
             "/api/open": lambda: c.open_target(str(body.get("target", ""))),
         }
         action = actions.get(self.path)

@@ -8,7 +8,7 @@ import csv
 import shutil
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 from selenium import webdriver
@@ -83,9 +83,9 @@ def _wait_for_download(folder, before, timeout=120):
     raise TimeoutError("Tableau did not finish downloading the CSV.")
 
 
-def download_dashboard(settings, credentials, destination, progress=lambda message: None,
+def download_dashboard(settings, credentials, destination, period, progress=lambda message: None,
                        attention=lambda message: None):
-    """Download the current Dashboard crosstab into `destination`; return the file path.
+    """Download the Dashboard crosstab covering `period` and its comparison range; return the file path.
 
     `attention(message)` is called when the person must act in the browser window.
     """
@@ -111,7 +111,7 @@ def download_dashboard(settings, credentials, destination, progress=lambda messa
                 except WebDriverException:
                     pass
                 attention(VERIFY_MESSAGE)
-            return _download(driver, settings, credentials, work, destination, progress, verification)
+            return _download(driver, settings, credentials, work, destination, period, progress, verification)
         except VerificationNeeded:
             # The authenticator needs a person, which a hidden browser cannot offer.
             visible = True
@@ -130,7 +130,7 @@ def download_dashboard(settings, credentials, destination, progress=lambda messa
                 prune_browser_profile(data_directory() / "browser" / kind)
 
 
-def _download(driver, settings, credentials, work, destination, progress, verification):
+def _download(driver, settings, credentials, work, destination, period, progress, verification):
     zone = TZ_LOOKUP[settings["timezones"]["default"]]
     entry = dashboard_entry_url(settings["tableau_view_url"])
     wait = WebDriverWait(driver, 60)
@@ -141,13 +141,12 @@ def _download(driver, settings, credentials, work, destination, progress, verifi
     progress("Opening the Dashboard view...")
     open_dashboard_view(driver, settings["mission"], zone)
 
-    today = datetime.now(zone).date()
-    start = today - timedelta(days=settings["lookback_days"])
-    progress(f"Filtering referrals since {start:%b %d}...")
+    first, last = period.download_start, period.end
+    progress(f"Filtering referrals from {first:%b %d} to {last:%b %d}...")
     set_date_filter(driver, wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'textarea[aria-label*="Start Date"]'))),
-                    f"{start.month}/{start.day}/{start.year}")
+                    f"{first.month}/{first.day}/{first.year}")
     set_date_filter(driver, wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'textarea[aria-label="End Date"]'))),
-                    f"{today.month}/{today.day}/{today.year}")
+                    f"{last.month}/{last.day}/{last.year}")
 
     progress("Downloading the referral list...")
     driver.execute_script("arguments[0].click();", wait.until(EC.element_to_be_clickable(
@@ -161,7 +160,7 @@ def _download(driver, settings, credentials, work, destination, progress, verifi
     driver.execute_script("arguments[0].click();", wait.until(EC.element_to_be_clickable(
         (By.XPATH, '//*[@id="export-crosstab-options-dialog-Dialog-BodyWrapper-Dialog-Body-Id"]/div/div[3]/button'))))
     downloaded = _wait_for_download(work, before)
-    validate_date_range(downloaded, start)
+    validate_date_range(downloaded, first, last)
     final = destination / f"tableau_export_{datetime.now():%Y%m%d_%H%M%S}.csv"
     for _ in range(40):
         try:
@@ -172,13 +171,15 @@ def _download(driver, settings, credentials, work, destination, progress, verifi
     raise TimeoutError("The downloaded CSV stayed locked by the browser.")
 
 
-def validate_date_range(path, cutoff):
-    """Reject exports whose date filter Tableau did not apply."""
+def validate_date_range(path, first, last):
+    """Reject exports whose date filters Tableau did not apply."""
     with open(path, newline="", encoding="utf-16") as infile:
         reader = csv.DictReader(infile, delimiter="\t")
         if "Event Date Selected" not in (reader.fieldnames or []):
             raise ValueError("The Tableau download is not the Dashboard detail crosstab (Event Date Selected is missing).")
         dates = [datetime.strptime(row["Event Date Selected"].strip(), "%m/%d/%Y").date()
                  for row in reader if row.get("Event Date Selected", "").strip()]
-    if dates and min(dates) < cutoff:
-        raise ValueError(f"Tableau's date filter was not applied: earliest row is {min(dates)}, expected {cutoff} or later.")
+    if dates and min(dates) < first:
+        raise ValueError(f"Tableau's date filter was not applied: earliest row is {min(dates)}, expected {first} or later.")
+    if dates and max(dates) > last:
+        raise ValueError(f"Tableau's date filter was not applied: latest row is {max(dates)}, expected {last} or earlier.")

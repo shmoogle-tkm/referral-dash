@@ -111,8 +111,10 @@ class StatsMixin:
 # REFERRAL PERSON
 # ======================
 class ReferralPerson:
-    def __init__(self, stats=None, settings=None):
+    def __init__(self, stats=None, settings=None, as_of=None):
         self.stats = stats if stats else {}
+        # An uncontacted referral has been waiting until this moment; default is now.
+        self.as_of = as_of
         from .settings import load_settings
         self.settings = settings if settings is not None else load_settings()
 
@@ -166,7 +168,7 @@ class ReferralPerson:
             return None
 
         if not self.first_contact_attempt_event_date:
-            contact_time_raw = datetime.now(UTC).strftime(DATE_FORMAT)
+            contact_time_raw = (self.as_of or datetime.now(UTC)).strftime(DATE_FORMAT)
         else:
             contact_time_raw = self.first_contact_attempt_event_date
 

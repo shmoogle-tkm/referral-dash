@@ -1,4 +1,4 @@
-"""Start Referral Dash, or render a file without a window: --self-test EXPORT OUTPUT_FOLDER."""
+"""Start Referral Dash, or render a file without a window: --self-test EXPORT OUTPUT_FOLDER [START END]."""
 import io
 import json
 import sys
@@ -22,12 +22,15 @@ def check_imports():
     webdriver.ChromeOptions(), webdriver.EdgeOptions()
 
 
-def self_test(filename, output):
+def self_test(filename, output, start=None, end=None):
     from referral_dash.engine import generate_reports
+    from referral_dash.period import make_period
     from referral_dash.settings import validate_settings
     try:
         check_imports()
-        folder, facts = generate_reports(filename, output, validate_settings({"mission": "Sample Mission"}))
+        settings = validate_settings({"mission": "Sample Mission"})
+        period = make_period(settings, start, end) if start else None
+        folder, facts = generate_reports(filename, output, settings, period=period)
         result = {"status": "passed", "folder": str(folder), "facts": facts}
     except Exception as exc:
         result = {"status": "failed", "error": str(exc)}
@@ -38,7 +41,7 @@ def self_test(filename, output):
 def main():
     if "--self-test" in sys.argv:
         index = sys.argv.index("--self-test")
-        return self_test(*sys.argv[index + 1:index + 3])
+        return self_test(*sys.argv[index + 1:index + 5])
     from referral_dash.app import main as run_app
     run_app()
     return 0

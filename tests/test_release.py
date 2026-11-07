@@ -5,7 +5,7 @@ import tempfile
 import time
 import unittest
 import unittest.mock
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 from urllib.request import Request, urlopen
@@ -15,15 +15,16 @@ from PIL import Image, ImageChops
 from referral_dash import engine
 from referral_dash.district_summary import BAD, GOOD, MUTED, percent_change, period_label, trend
 from referral_dash.group import ReferralPerson
-from referral_dash.history import History, select_previous
+from referral_dash.period import make_period
 from referral_dash.settings import DEFAULTS, app_directory, validate_settings
 
 SAMPLE = app_directory() / "sample-data" / "sample-referrals.csv"
 SETTINGS = validate_settings({"mission": "Sample Mission"})
+SAMPLE_PERIOD = make_period(SETTINGS, "2026-10-01", "2026-10-08")
 
 
 class Isolated(unittest.TestCase):
-    """Every test gets its own settings/history folder instead of the user's AppData."""
+    """Every test gets its own settings folder instead of the user's AppData."""
 
     def setUp(self):
         self.home = tempfile.TemporaryDirectory()
@@ -50,7 +51,7 @@ class ReportTests(Isolated):
             previous = Path(folder) / "areas"
             previous.mkdir()
             (previous / "keep.txt").write_text("existing output")
-            output, facts = engine.generate_reports(SAMPLE, folder, SETTINGS)
+            output, facts = engine.generate_reports(SAMPLE, folder, SETTINGS, period=SAMPLE_PERIOD)
             self.assertEqual((facts["referrals"], facts["images"], facts["district_summaries"], len(facts["areas"])), (8, 11, 2, 4))
             self.assertEqual(sorted(p.name for p in output.iterdir() if p.is_dir()),
                              ["1. Areas", "2. Districts", "3. Zones", "4. Mission", "5. District Summaries"])
@@ -61,25 +62,23 @@ class ReportTests(Isolated):
             for image in output.rglob("*.jpg"):
                 with Image.open(image) as value:
                     value.verify()
-            again, _ = engine.generate_reports(SAMPLE, folder, SETTINGS)
+            again, _ = engine.generate_reports(SAMPLE, folder, SETTINGS, period=SAMPLE_PERIOD)
             self.assertNotEqual(output, again)
             self.assertEqual((previous / "keep.txt").read_text(), "existing output")
 
     def test_progress_reports_every_image(self):
         calls = []
         with tempfile.TemporaryDirectory() as folder:
-            engine.generate_reports(SAMPLE, folder, SETTINGS, lambda m, done=None, total=None: calls.append((done, total)))
+            engine.generate_reports(SAMPLE, folder, SETTINGS, lambda m, done=None, total=None: calls.append((done, total)), period=SAMPLE_PERIOD)
         counted = [c for c in calls if c[1]]
         self.assertEqual(len(counted), 11)
         self.assertEqual(counted[-1], (10, 11))
 
-    def test_failed_render_never_publishes_partial_folder_or_history(self):
+    def test_failed_render_never_publishes_partial_folder(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(engine, "render_summary", side_effect=OSError("summary cannot save")):
-            history = History(SETTINGS)
             with self.assertRaisesRegex(OSError, "summary cannot save"):
-                engine.generate_reports(SAMPLE, folder, SETTINGS, history=history)
+                engine.generate_reports(SAMPLE, folder, SETTINGS)
             self.assertEqual(list(Path(folder).iterdir()), [])
-            self.assertEqual(history.snapshots(), [])
 
     def test_bad_exports_fail_without_output(self):
         cases = [lambda rows: [],
@@ -96,10 +95,10 @@ class ReportTests(Isolated):
     def test_real_tableau_shapes_date_only_milestones_and_unplaced_rows(self):
         def shape(rows):
             rows = [{**row, "First New Person Being Taught Date": "8/30/2026" if row["First New Person Being Taught Date"] else ""}
-                    for row in rows] * 3
+                    for row in rows if row["First Referral Event Date"].startswith("10/")] * 3
             return rows + [{**rows[0], "Latest Zone Name": "", "Latest District Name": "", "Latest Teaching Area Name": ""}]
         with tempfile.TemporaryDirectory() as folder:
-            mission, facts = engine.read_export(self.rewrite_sample(folder, shape), SETTINGS)
+            mission, _, facts = engine.read_export(self.rewrite_sample(folder, shape), SETTINGS)
             self.assertEqual((facts["referrals"], facts["skipped_rows"]), (24, 1))
             self.assertEqual(mission.percent_found, 25)
             mostly_unplaced = lambda rows: rows[:1] + [{**row, "Latest Zone Name": "Null"} for row in rows[1:]]
@@ -111,8 +110,8 @@ class ReportTests(Isolated):
 
     def test_utf8_comma_export(self):
         with tempfile.TemporaryDirectory() as folder:
-            mission, _ = engine.read_export(self.rewrite_sample(folder), SETTINGS)
-            self.assertEqual(mission.total_referrals, 8)
+            mission, _, _ = engine.read_export(self.rewrite_sample(folder), SETTINGS)
+            self.assertEqual(mission.total_referrals, 16)
 
     def test_gauge_numbers_are_centered_independently_of_units(self):
         base = Image.open(app_directory() / "images" / "dashboard.png").convert("RGB")
@@ -137,53 +136,95 @@ class ReportTests(Isolated):
 
 
 class ComparisonTests(Isolated):
-    def snapshot(self, days_ago, digest):
-        return {"generated_utc": (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat(), "input_sha256": digest}
-
-    def test_prefers_last_weeks_run_then_latest_earlier_run(self):
-        now = datetime.now(timezone.utc)
-        runs = [self.snapshot(1, "a"), self.snapshot(6, "b"), self.snapshot(13, "c")]
-        self.assertEqual(select_previous(runs, "new", now)["input_sha256"], "b")
-        self.assertEqual(select_previous(runs[:1], "new", now)["input_sha256"], "a")
-        self.assertIsNone(select_previous([self.snapshot(6, "same")], "same", now))
-        self.assertIsNone(select_previous([], "new", now))
-
-    def test_second_run_compares_automatically_and_history_is_scoped_to_settings(self):
+    def test_first_ever_run_shows_change_from_the_week_before(self):
+        """Regression: a mission's first run used to say "No prior data" on every row."""
         with tempfile.TemporaryDirectory() as folder:
-            history = History(SETTINGS)
-            earlier = self.rewrite_sample(folder, lambda rows: [{**row, "First Contact Attempt Event Date": ""} for row in rows])
-            _, first = engine.generate_reports(earlier, folder, SETTINGS, history=history)
-            self.assertIsNone(first["comparison_generated_utc"])
-            _, second = engine.generate_reports(SAMPLE, folder, SETTINGS, history=history)
-            self.assertEqual(second["comparison_generated_utc"], first["generated_utc"])
-            self.assertEqual(len(history.snapshots()), 2)
-            # Same CSV again: never compared with itself, so it compares with the first run.
-            _, third = engine.generate_reports(SAMPLE, folder, SETTINGS, history=history)
-            self.assertEqual(third["comparison_generated_utc"], first["generated_utc"])
-            other = History(validate_settings({"mission": "Other Mission"}))
-            self.assertEqual(other.snapshots(), [])
-            # Where reports are saved and how many are kept do not change the numbers, so they keep the same history.
-            moved = History(validate_settings({**SETTINGS, "output_folder": "D:/elsewhere", "keep_reports": 2}))
-            self.assertEqual(len(moved.snapshots()), 3)
+            output, facts = engine.generate_reports(SAMPLE, folder, SETTINGS, period=SAMPLE_PERIOD)
+            self.assertEqual(facts["period"], "Oct 1, 2026 – Oct 8, 2026")
+            self.assertEqual(facts["comparison_period"], "Sep 24, 2026 – Oct 1, 2026")
+            summary = Image.open(next((output / "5. District Summaries").glob("*.jpg"))).convert("RGB")
+            arrows = sum(1 for r, g, b in summary.get_flattened_data() if (g > 200 and r < 120 and b < 180) or (r > 220 and g < 120 and b < 120))
+            self.assertGreater(arrows, 100)
+            whole, facts = engine.generate_reports(SAMPLE, folder, SETTINGS)
+            self.assertIsNone(facts["comparison_period"])
+            summary = Image.open(next((whole / "5. District Summaries").glob("*.jpg"))).convert("RGB")
+            self.assertLess(sum(1 for r, g, b in summary.get_flattened_data() if g > 200 and r < 120 and b < 180), 20)
 
-    def test_version_one_reports_in_the_output_folder_become_baselines(self):
+    def test_reports_count_only_the_chosen_range_and_baseline_only_the_earlier_one(self):
+        mission, baseline, facts = engine.read_export(SAMPLE, SETTINGS, SAMPLE_PERIOD)
+        self.assertEqual(mission.total_referrals, 8)
+        self.assertEqual(facts["first_referral_date"], "2026-10-01")
+        self.assertEqual(baseline.total_referrals, 9)  # Sep 24 to Oct 1, including Oct 1's referral.
+        # On Oct 1, that referral had been contacted but not yet taught (Oct 2).
+        self.assertEqual(baseline.total_found, 1)
+
+    def test_rewind_applies_the_rules_measured_on_real_exports(self):
+        cutoff = datetime(2026, 10, 23, 18, 39, tzinfo=timezone.utc)
+        zone = timezone.utc
+        row = {"First Referral Event Date": "10/20/2026 02:00:00 PM", "First Contact Attempt Event Date": "10/23/2026 06:40:00 PM",
+               "First Successful Contact Attempt Event Date": "10/21/2026 03:00:00 PM",
+               "First New Person Being Taught Date": "10/25/2026", "First Lesson Date": "10/23/2026",
+               "First Sacrament Date": "10/25/2026", "Latest Sacrament Date": "10/18/2026 12:00:00 AM"}
+        earlier = engine.rewind(row, cutoff, zone)
+        self.assertEqual(earlier["First Contact Attempt Event Date"], "")  # One minute after the cutoff.
+        self.assertEqual(earlier["First Successful Contact Attempt Event Date"], row["First Successful Contact Attempt Event Date"])
+        self.assertEqual(earlier["First New Person Being Taught Date"], "10/25/2026")  # The Sunday ending this week; lesson already held.
+        self.assertEqual(earlier["First Sacrament Date"], "")  # This coming Sunday.
+        self.assertEqual(earlier["Latest Sacrament Date"], row["Latest Sacrament Date"])
+        later_lesson = engine.rewind({**row, "First Lesson Date": "10/24/2026"}, cutoff, zone)
+        self.assertEqual(later_lesson["First New Person Being Taught Date"], "")
+        no_lesson = engine.rewind({**row, "First Lesson Date": ""}, cutoff, zone)
+        self.assertEqual(no_lesson["First New Person Being Taught Date"], "10/25/2026")
+        next_week = engine.rewind({**row, "First Lesson Date": "", "First New Person Being Taught Date": "11/01/2026"}, cutoff, zone)
+        self.assertEqual(next_week["First New Person Being Taught Date"], "")
+        self.assertIsNone(engine.rewind({**row, "First Referral Event Date": "10/23/2026 07:00:00 PM"}, cutoff, zone))
+
+    def test_past_range_measures_response_time_at_its_end_not_today(self):
         with tempfile.TemporaryDirectory() as folder:
-            old, facts = engine.generate_reports(self.rewrite_sample(folder), folder, SETTINGS)
-            summary = json.loads((old / "run-summary.json").read_text())
-            summary["generated_utc"] = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-            summary["input_sha256"] = "0" * 64
-            (old / "run-summary.json").write_text(json.dumps(summary))
-            history = History(SETTINGS)
-            self.assertEqual(history.import_reports(folder), 1)
-            self.assertEqual(history.import_reports(folder), 0)
-            _, new = engine.generate_reports(SAMPLE, folder, SETTINGS, history=history)
-            self.assertEqual(new["comparison_generated_utc"], summary["generated_utc"])
+            uncontacted = lambda rows: [{**row, "First Contact Attempt Event Date": ""} for row in rows if row["First Referral Event Date"].startswith("10/08")]
+            target = self.rewrite_sample(folder, uncontacted)
+            mission, _, _ = engine.read_export(target, SETTINGS, make_period(SETTINGS, "2026-10-08", "2026-10-08"))
+            self.assertLess(mission.median_response_time, 24 * 60)
 
-    def test_damaged_history_file_is_ignored(self):
-        history = History(SETTINGS)
-        history.folder.mkdir(parents=True)
-        (history.folder / "broken.json").write_text("{not json")
-        self.assertEqual(history.snapshots(), [])
+    def test_csv_without_the_earlier_week_has_no_comparison(self):
+        with tempfile.TemporaryDirectory() as folder:
+            only_october = self.rewrite_sample(folder, lambda rows: [row for row in rows if row["First Referral Event Date"].startswith("10/")])
+            self.assertIsNone(engine.read_export(only_october, SETTINGS, SAMPLE_PERIOD)[1])
+            # A download known to cover the earlier week trusts the requested range instead.
+            self.assertIsNotNone(engine.read_export(only_october, SETTINGS, SAMPLE_PERIOD, baseline_covered=True)[1])
+            with self.assertRaisesRegex(ValueError, "no referrals from"):
+                engine.read_export(only_october, SETTINGS, make_period(SETTINGS, "2026-01-01", "2026-01-31"))
+
+    def test_range_and_week_earlier_dates(self):
+        period = make_period(SETTINGS, "2026-08-08", "2026-09-08")
+        self.assertEqual((period.baseline_start, period.baseline_end), (date(2026, 8, 1), date(2026, 9, 1)))
+        self.assertEqual(period.download_start, date(2026, 8, 1))
+        self.assertEqual(period.cutoff, datetime(2026, 9, 8, 23, 59, 59, tzinfo=timezone.utc))
+        self.assertEqual(period.baseline_cutoff, datetime(2026, 9, 1, 23, 59, 59, tzinfo=timezone.utc))
+        chosen = make_period(SETTINGS, "2026-08-08", "2026-09-08", "2026-06-01", "2026-07-01")
+        self.assertEqual(chosen.download_start, date(2026, 6, 1))
+        self.assertEqual(chosen.baseline_cutoff, datetime(2026, 7, 1, 23, 59, 59, tzinfo=timezone.utc))
+        inside = make_period(SETTINGS, "2026-08-08", "2026-09-08", "2026-08-20", "2026-08-25")
+        self.assertEqual(inside.download_start, date(2026, 8, 8))
+        now = datetime(2026, 11, 6, 15, 0, tzinfo=timezone.utc)
+        ending_today = make_period(SETTINGS, now=now)
+        self.assertEqual((ending_today.start, ending_today.end, ending_today.cutoff), (date(2026, 10, 7), date(2026, 11, 6), now))
+        for start, end in (("2026-09-09", "2026-09-08"), ("2026-11-01", "2026-11-07"), ("2025-01-01", "2026-09-08"), ("soon", "2026-09-08")):
+            with self.subTest(start=start, end=end), self.assertRaises(ValueError):
+                make_period(SETTINGS, start, end, now=now)
+        for first, last in (("2026-08-01", None), (None, "2026-09-01"), ("2026-09-01", "2026-08-01"), ("2026-08-01", "2026-09-08"), ("2026-08-01", "2026-09-30")):
+            with self.subTest(first=first, last=last), self.assertRaises(ValueError):
+                make_period(SETTINGS, "2026-08-08", "2026-09-08", first, last, now=now)
+
+    def test_a_chosen_comparison_range_replaces_the_week_before(self):
+        period = make_period(SETTINGS, "2026-10-01", "2026-10-08", "2026-09-24", "2026-09-27")
+        with tempfile.TemporaryDirectory() as folder:
+            _, facts = engine.generate_reports(SAMPLE, folder, SETTINGS, period=period)
+        self.assertEqual(facts["comparison_period"], "Sep 24, 2026 – Sep 27, 2026")
+        self.assertEqual(engine.read_export(SAMPLE, SETTINGS, period)[1].total_referrals, 4)
+        # Older than the file reaches, so it is reported as missing rather than as a decline.
+        missing = make_period(SETTINGS, "2026-10-01", "2026-10-08", "2026-08-01", "2026-08-15")
+        self.assertIsNone(engine.read_export(SAMPLE, SETTINGS, missing)[1])
 
     def test_trend_rules_match_the_data_hub(self):
         self.assertEqual(trend(percent_change(80, 40), False), ("100.0%", GOOD, True))
@@ -261,13 +302,13 @@ class TableauTests(unittest.TestCase):
         from referral_dash.tableau.session import VerificationNeeded
         opened, asked = [], []
 
-        def fake_download(driver, settings, credentials, work, destination, progress, verification):
+        def fake_download(driver, settings, credentials, work, destination, period, progress, verification):
             verification()  # The Church sign-in shows an authenticator prompt.
             return "export.csv"
         with tempfile.TemporaryDirectory() as folder, \
                 patch.object(download, "create_browser", side_effect=lambda work, visible: opened.append(visible) or unittest.mock.MagicMock()), \
                 patch.object(download, "_download", side_effect=fake_download):
-            result = download.download_dashboard(SETTINGS, None, folder, attention=asked.append)
+            result = download.download_dashboard(SETTINGS, None, folder, SAMPLE_PERIOD, attention=asked.append)
         self.assertEqual(result, "export.csv")
         self.assertEqual(opened, [False, True])  # Hidden first, then visible for the person.
         self.assertEqual(asked, [download.VERIFY_MESSAGE])
@@ -278,12 +319,31 @@ class TableauTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "export.csv"
             path.write_text("Event Date Selected\tFull Name\n10/01/2026\tA\n10/20/2026\tB\n", encoding="utf-16")
-            validate_date_range(path, datetime(2026, 10, 1).date())
-            with self.assertRaisesRegex(ValueError, "not applied"):
-                validate_date_range(path, datetime(2026, 10, 2).date())
+            validate_date_range(path, date(2026, 10, 1), date(2026, 10, 20))
+            with self.assertRaisesRegex(ValueError, "earliest row"):
+                validate_date_range(path, date(2026, 10, 2), date(2026, 10, 20))
+            with self.assertRaisesRegex(ValueError, "latest row"):
+                validate_date_range(path, date(2026, 10, 1), date(2026, 10, 19))
             path.write_text("Full Name\nA\n", encoding="utf-16")
             with self.assertRaisesRegex(ValueError, "Event Date Selected"):
-                validate_date_range(path, datetime(2026, 10, 2).date())
+                validate_date_range(path, date(2026, 10, 2), date(2026, 10, 20))
+
+    def test_tableau_is_asked_for_the_extra_week_through_the_end_date(self):
+        from referral_dash.tableau import download
+        typed = []
+        driver = unittest.mock.MagicMock()
+        with tempfile.TemporaryDirectory() as folder:
+            export = Path(folder) / "work" / "crosstab.csv"
+            export.parent.mkdir()
+            export.write_text("Event Date Selected\n8/1/2026\n9/8/2026\n", encoding="utf-16")
+            with patch.object(download, "login_tableau"), patch.object(download, "open_dashboard_view"), \
+                    patch.object(download, "WebDriverWait"), patch.object(download.time, "sleep"), \
+                    patch.object(download, "_wait_for_download", return_value=export), \
+                    patch.object(download, "set_date_filter", side_effect=lambda d, element, value: typed.append(value)):
+                final = download._download(driver, SETTINGS, unittest.mock.MagicMock(), export.parent, Path(folder),
+                                           make_period(SETTINGS, "2026-08-08", "2026-09-08"), lambda m: None, lambda: None)
+            self.assertTrue(final.exists())
+        self.assertEqual(typed, ["8/1/2026", "9/8/2026"])
 
 
 class CleanupTests(Isolated):
@@ -413,19 +473,62 @@ class AppTests(Isolated):
     def test_csv_runs_keep_only_the_newest_report_sets(self):
         from referral_dash.settings import load_settings, save_settings
         save_settings({**load_settings(), "mission": "Sample Mission", "output_folder": self.output.name, "keep_reports": 2})
-        # Three different exports, so each run is its own comparison baseline.
         inputs = []
         for keep in (8, 7, 6):
             folder = Path(tempfile.mkdtemp(dir=self.home.name))
-            inputs.append(str(self.rewrite_sample(folder, lambda rows, keep=keep: rows[:keep])))
+            inputs.append(str(self.rewrite_sample(folder, lambda rows, keep=keep: rows[-keep:])))
         with patch.object(self.controller, "ask_ui", side_effect=inputs):
             results = [self.finish({"source": "file"})["run"]["result"] for _ in range(3)]
         self.assertEqual([r["removed"] for r in results], [0, 0, 1])
         state = self.call("/api/state")[1]
         self.assertEqual([r["name"] for r in state["recent"]], [Path(results[i]["folder"]).name for i in (2, 1)])
-        # Comparison history is kept separately, so deleting report sets loses no baselines.
-        self.assertEqual(len(History(SETTINGS).snapshots()), 3)
-        self.assertIsNotNone(results[2]["compared_with"])
+        self.assertIsNone(results[2]["compared_with"])  # A CSV without chosen dates is reported whole.
+
+    def test_sample_run_shows_the_week_before_comparison(self):
+        result = self.finish({"source": "sample"})["run"]["result"]
+        self.assertEqual(result["compared_with"], "Sep 24, 2026 – Oct 1, 2026")
+        self.assertEqual(result["referrals"], 8)
+
+    def test_chosen_dates_reach_the_download_and_the_report(self):
+        from referral_dash.credentials import LoginCredentials
+        from referral_dash.settings import load_settings, save_settings
+        save_settings({**load_settings(), "mission": "Sample Mission", "output_folder": self.output.name})
+        seen = []
+
+        def download(settings, login, folder, period, progress, attention):
+            seen.append(period)
+            return SAMPLE
+        with patch("referral_dash.tableau.download.download_dashboard", side_effect=download), \
+                patch.object(self.app.credentials, "load_login", return_value=LoginCredentials("a@b.c", "user", "pw")):
+            result = self.finish({"source": "tableau", "start": "2026-10-01", "end": "2026-10-08"})["run"]["result"]
+            default = self.finish({"source": "tableau"})
+        self.assertEqual((seen[0].start, seen[0].end), (date(2026, 10, 1), date(2026, 10, 8)))
+        self.assertEqual(result["period"], "Oct 1, 2026 – Oct 8, 2026")
+        self.assertEqual(result["compared_with"], "Sep 24, 2026 – Oct 1, 2026")
+        self.assertEqual(seen[1].end.isoformat(), default["default_range"][1])  # Dates were not remembered.
+        with patch("referral_dash.tableau.download.download_dashboard", side_effect=download), \
+                patch.object(self.app.credentials, "load_login", return_value=LoginCredentials("a@b.c", "user", "pw")):
+            chosen = self.finish({"source": "tableau", "start": "2026-10-01", "end": "2026-10-08",
+                                  "compare_start": "2026-09-24", "compare_end": "2026-09-27"})["run"]["result"]
+        self.assertEqual(chosen["compared_with"], "Sep 24, 2026 – Sep 27, 2026")
+        self.assertEqual(seen[2].download_start, date(2026, 9, 24))
+
+    def test_bad_dates_are_refused_before_a_run_starts(self):
+        from referral_dash.credentials import LoginCredentials
+        from referral_dash.settings import load_settings, save_settings
+        save_settings({**load_settings(), "mission": "Sample Mission"})
+        with patch.object(self.app.credentials, "load_login", return_value=LoginCredentials("a@b.c", "user", "pw")):
+            status, payload = self.call("/api/run", {"source": "tableau", "start": "2026-10-08", "end": "2026-10-01"})
+            self.assertEqual(status, 400)
+            self.assertIn("on or before", payload["error"])
+            status, payload = self.call("/api/run", {"source": "tableau", "start": "2026-10-01", "end": "2099-01-01"})
+            self.assertEqual(status, 400)
+            self.assertIn("future", payload["error"])
+            status, payload = self.call("/api/run", {"source": "tableau", "start": "2026-10-01", "end": "2026-10-08",
+                                                     "compare_start": "2026-09-01", "compare_end": "2026-10-20"})
+            self.assertEqual(status, 400)
+            self.assertIn("must end before", payload["error"])
+        self.assertIsNone(self.call("/api/state")[1]["run"])
 
     def test_lost_window_is_reopened_then_falls_back_to_the_default_browser(self):
         app = self.app

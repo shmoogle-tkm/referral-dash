@@ -25,9 +25,10 @@ $check = Join-Path $env:TEMP "referral-dash-selftest"
 if (Test-Path $check) { Remove-Item -Recurse -Force $check }
 New-Item -ItemType Directory $check | Out-Null
 $sample = Join-Path $PSScriptRoot "referral_dash\sample-data\sample-referrals.csv"
-Start-Process "$release\Referral Dash.exe" -ArgumentList "--self-test", "`"$sample`"", "`"$check`"" -Wait
+Start-Process "$release\Referral Dash.exe" -ArgumentList "--self-test", "`"$sample`"", "`"$check`"", "2026-10-01", "2026-10-08" -Wait
 $result = Get-Content "$check\self-test-result.json" | ConvertFrom-Json
 if ($result.status -ne "passed") { throw "Packaged self-test failed: $($result.error)" }
+if (-not $result.facts.comparison_period) { throw "Packaged self-test made no week-before comparison." }
 
 $zip = "dist\Referral-Dash-$version-Windows.zip"
 if (Test-Path $zip) { Remove-Item $zip }

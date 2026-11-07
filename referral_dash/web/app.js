@@ -22,6 +22,8 @@ let state = null;
 let formsFilled = false;
 let view = null;
 let wasReady = null;
+// The dates apply to one run; until they are changed they follow today's default range.
+let rangeEdited = false;
 
 async function api(path, body) {
   const response = await fetch(path, {
@@ -72,6 +74,46 @@ function shortDate(iso) {
 
 function dateTime(iso) {
   return iso ? new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+}
+
+function shifted(day, days) {
+  const value = new Date(`${day}T00:00:00`);
+  value.setDate(value.getDate() - days);
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+}
+
+function longDate(day) {
+  return new Date(`${day}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+// The range the change arrows compare with: a preset shift, or the dates typed in.
+function compareRange() {
+  const [start, end] = [$("#range-start").value, $("#range-end").value];
+  const choice = $("#compare-select").value;
+  if (choice === "custom") return [$("#compare-start").value, $("#compare-end").value];
+  return start && end ? [shifted(start, Number(choice)), shifted(end, Number(choice))] : ["", ""];
+}
+
+function renderRange(ready, running) {
+  const [start, end] = [$("#range-start"), $("#range-end")];
+  $("#range").hidden = !ready;
+  if (!rangeEdited) [start.value, end.value] = state.default_range;
+  start.max = end.max = state.default_range[1];
+  start.disabled = end.disabled = running;
+  const [compareStart, compareEnd] = [$("#compare-start"), $("#compare-end")];
+  const custom = $("#compare-select").value === "custom";
+  $("#compare-fields").hidden = !custom;
+  // Opening the custom dates starts them from the range that was just showing.
+  if (!custom) [compareStart.value, compareEnd.value] = compareRange();
+  compareStart.max = compareEnd.max = state.default_range[1];
+  compareStart.disabled = compareEnd.disabled = $("#compare-select").disabled = running;
+  const [first, last] = compareRange();
+  $("#range-note").textContent = !start.value || !end.value ? "Choose both report dates."
+    : !first || !last ? "Choose both dates to compare with."
+    : last >= end.value ? "The comparison dates must end before the report's end date."
+    : `Change arrows compare with ${longDate(first)} – ${longDate(last)}.`;
+  $("#range-reset").hidden = !rangeEdited;
+  $("#range-reset").textContent = `Back to the last ${state.settings.lookback_days} days`;
 }
 
 function daysAgo(iso) {
@@ -129,15 +171,16 @@ function renderRunCard(ready, running) {
   const last = state.recent.find((run) => run.mission === state.settings.mission);
   const due = !last || Date.now() - new Date(last.generated_utc) >= 6 * DAY;
   $("#run-eyebrow").textContent = !ready ? "Almost there" : last ? `Last run ${shortDate(last.generated_utc)} · ${daysAgo(last.generated_utc)}` : "First run";
-  $("#run-title").textContent = !ready ? "Finish setup to make reports" : due ? "Make this week's reports" : "This week's reports are done";
+  $("#run-title").textContent = !ready ? "Finish setup to make reports" : rangeEdited ? "Make reports for these dates" : due ? "Make this week's reports" : "This week's reports are done";
   $("#run-lede").textContent = !ready
     ? "Add your Church account and mission in Settings. It takes a minute."
-    : `Signs in to Tableau, downloads the last ${state.settings.lookback_days} days of referrals, and makes every dashboard and district summary` +
-      (last ? ", compared with last week." : ".");
+    : "Signs in to Tableau, downloads your referrals, and makes every dashboard and district summary, compared with the week before.";
   const button = $("#run-button");
   button.disabled = running;
-  button.textContent = running ? "Running…" : !ready ? "Finish setup" : due ? "Run now" : "Run again";
-  button.classList.toggle("is-quiet", ready && !due && !running);
+  const fresh = due || rangeEdited;
+  button.textContent = running ? "Running…" : !ready ? "Finish setup" : fresh ? "Run now" : "Run again";
+  button.classList.toggle("is-quiet", ready && !fresh && !running);
+  renderRange(ready, running);
   $$(".run-alternatives [data-run]").forEach((b) => (b.disabled = running));
 
   $("#output-name").textContent = folderName(state.output_folder);
@@ -176,7 +219,7 @@ function renderWork(run) {
       <div class="stat"><strong>${r.referrals}</strong><small>Referrals</small></div>
       <div class="stat"><strong>${r.dashboards}</strong><small>Dashboards</small></div>
       <div class="stat"><strong>${r.summaries}</strong><small>District summaries</small></div>
-      <div class="stat"><strong class="small">${r.compared_with ? shortDate(r.compared_with) : "—"}</strong><small>${r.compared_with ? "Compared with" : "First run"}</small></div>` +
+      <div class="stat"><strong class="small">${r.compared_with ? escapeHtml(r.compared_with) : "—"}</strong><small>${r.compared_with ? "Compared with" : "Comparison dates not in this file"}</small></div>` +
       (r.removed ? `<p class="result-note">Removed ${r.removed} older report set${r.removed === 1 ? "" : "s"} to save space.</p>` : "");
   }
   const actions = $("#work-actions");
@@ -199,7 +242,7 @@ function renderReports() {
   list.innerHTML = state.recent.map((run) => `
     <div class="report-row">
       <div class="report-main"><strong>${dateTime(run.generated_utc)}</strong>
-        <span>${run.referrals ?? "?"} referrals · ${run.images ?? "?"} pictures · ${run.compared_with ? `vs ${shortDate(run.compared_with)}` : "no comparison"}</span></div>
+        <span>${run.period ? `${escapeHtml(run.period)} · ` : ""}${run.referrals ?? "?"} referrals · ${run.images ?? "?"} pictures · ${run.compared_with ? `vs ${escapeHtml(run.compared_with)}` : "no comparison"}</span></div>
       <button class="button" data-open="${escapeHtml(run.folder)}">Open</button>
     </div>`).join("");
 }
@@ -247,13 +290,31 @@ document.addEventListener("click", async (event) => {
   if (target.dataset.run) {
     const ready = state.configured && state.account.saved;
     if (target.dataset.run !== "sample" && !ready) return showView("settings");
+    const body = { source: target.dataset.run, watch: Boolean(target.dataset.watch) };
+    // A CSV keeps its own dates unless a range was chosen on purpose.
+    if (target.dataset.run === "tableau" || (target.dataset.run === "file" && rangeEdited)) {
+      [body.start, body.end] = [$("#range-start").value, $("#range-end").value];
+      [body.compare_start, body.compare_end] = compareRange();
+      if (!body.start || !body.end || !body.compare_start || !body.compare_end) return toast("Choose all the dates first.", true);
+    }
     showView("home");
     target.disabled = true;
-    await act("/api/run", { source: target.dataset.run, watch: Boolean(target.dataset.watch) });
+    await act("/api/run", body);
     target.disabled = false;
   }
 });
 
+for (const field of [$("#range-start"), $("#range-end"), $("#compare-select"), $("#compare-start"), $("#compare-end")]) {
+  field.addEventListener("input", () => {
+    rangeEdited = true;
+    render();
+  });
+}
+$("#range-reset").addEventListener("click", () => {
+  rangeEdited = false;
+  $("#compare-select").value = "7";
+  render();
+});
 $("#output-change").addEventListener("click", () => act("/api/output-folder", {}));
 $("#output-open").addEventListener("click", () => act("/api/open", { target: state.output_folder }));
 $("#keep-select").addEventListener("change", (event) => act("/api/settings", { keep_reports: Number(event.target.value) }, "Saved."));
