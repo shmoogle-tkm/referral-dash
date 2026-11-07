@@ -40,6 +40,10 @@ Each run makes a folder named for its dates, like
 - Reports are saved in Documents\Referral Dash reports. Click "Change" on the
   main screen to save them somewhere else. To share them, pick a folder that
   Google Drive for desktop, OneDrive or a shared drive already syncs.
+- Or click "Connect Google Drive", sign in, and choose a folder. Each run then
+  uploads there too. Older uploads move to the Drive trash, using the same
+  number you set for keeping reports. The app can only see that folder and what
+  it put there, so nothing else in your Drive can be changed.
 - Only the newest 8 report sets are kept; older ones are deleted after each
   run so the folder stays small. Type a different number (0 keeps them all) on the
   main screen. Deleting old reports never affects the comparison.

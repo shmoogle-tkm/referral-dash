@@ -178,6 +178,20 @@ function renderRunCard(ready, running) {
   $("#keep-help").textContent = keep ? "report sets. Older ones are deleted after each run to save space. 0 keeps them all." : "report sets. 0 keeps them all, so nothing is deleted.";
 }
 
+function renderDrive(running) {
+  const drive = state.drive;
+  $("#drive-row").hidden = !drive.available;
+  $("#drive-name").textContent = drive.connecting ? "Finish in your browser…" : drive.connected ? drive.folder_name : "Not connected";
+  const note = $("#drive-note");
+  note.textContent = drive.error || (drive.connecting ? "Sign in and choose a folder." : drive.connected ? "Each run uploads here." : "Sign in and choose a folder, and each run uploads there.");
+  note.className = drive.error ? "is-error" : "";
+  $("#drive-connect").textContent = drive.connected ? "Change folder" : "Connect Google Drive";
+  $("#drive-connect").disabled = drive.connecting || running;
+  $("#drive-disconnect").hidden = !drive.connected;
+  $("#drive-disconnect").disabled = running;
+  $("#drive-open").hidden = !drive.connected;
+}
+
 function elapsed(run) {
   const end = run.finished ? new Date(run.finished) : new Date();
   const seconds = Math.max(0, Math.round((end - new Date(run.started)) / 1000));
@@ -208,12 +222,14 @@ function renderWork(run) {
       <div class="stat"><strong>${r.dashboards}</strong><small>Dashboards</small></div>
       <div class="stat"><strong>${r.summaries}</strong><small>District summaries</small></div>
       <div class="stat"><strong class="small">${r.compared_with ? escapeHtml(r.compared_with) : "—"}</strong><small>${r.compared_with ? "Compared with" : "Comparison dates not in this file"}</small></div>` +
-      (r.removed ? `<p class="result-note">Removed ${r.removed} older report set${r.removed === 1 ? "" : "s"} to save space.</p>` : "");
+      (r.removed ? `<p class="result-note">Removed ${r.removed} older report set${r.removed === 1 ? "" : "s"} to save space.</p>` : "") +
+      (r.drive_error ? `<p class="result-note is-error">Couldn't upload to Google Drive: ${escapeHtml(r.drive_error)} Your reports are still on this computer.</p>` : "");
   }
   const actions = $("#work-actions");
   actions.hidden = run.status === "running";
   if (run.status === "done") {
-    actions.innerHTML = `<button class="button button-primary" data-open="${escapeHtml(run.result.folder)}">Open reports</button>`;
+    actions.innerHTML = `<button class="button button-primary" data-open="${escapeHtml(run.result.folder)}">Open reports</button>` +
+      (run.result.drive_link ? `<button class="button" data-open="${escapeHtml(run.result.drive_link)}">Open in Drive</button>` : "");
   } else if (run.status === "failed") {
     actions.innerHTML = `<button class="button button-primary" data-run="${escapeHtml(run.source)}">Try again</button>` +
       (run.source === "tableau" ? `<button class="button" data-run="tableau" data-watch="1">Try again and show the browser</button>` : "") +
@@ -255,6 +271,7 @@ function render() {
   $("#footer-version").textContent = `Referral Dash ${state.version}`;
   renderSettings(ready);
   renderRunCard(ready, running);
+  renderDrive(running);
   renderWork(run);
   renderReports();
 }
@@ -286,6 +303,9 @@ document.addEventListener("click", async (event) => {
 });
 
 $("#advanced-form").addEventListener("input", renderDateChoices);
+$("#drive-connect").addEventListener("click", () => act("/api/drive/connect", {}));
+$("#drive-disconnect").addEventListener("click", () => act("/api/drive/disconnect", {}, "Google Drive disconnected. Nothing was removed from your Drive."));
+$("#drive-open").addEventListener("click", () => act("/api/open", { target: state.drive.folder_link }));
 $("#output-change").addEventListener("click", () => act("/api/output-folder", {}));
 $("#output-open").addEventListener("click", () => act("/api/open", { target: state.output_folder }));
 $("#keep-input").addEventListener("change", async (event) => {

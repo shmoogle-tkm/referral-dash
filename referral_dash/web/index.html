@@ -68,6 +68,19 @@
               <button class="button" id="output-change">Change</button>
             </div>
           </div>
+          <div class="save-row drive-row" id="drive-row" hidden>
+            <div class="save-icon drive-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.1 3h7.8l6.1 10.6-3.9 6.8H5.9L2 13.6 8.1 3Zm1.2 2-4.9 8.6 1.9 3.3 4.9-8.6L9.3 5Zm3.9 4.3L8.3 18h9.4l2-3.4-4.9-.1-1.6-5.2Z"/></svg></div>
+            <div class="save-copy">
+              <small>Also upload to Google Drive</small>
+              <strong id="drive-name">Not connected</strong>
+              <span id="drive-note"></span>
+            </div>
+            <div class="save-actions">
+              <button class="button" id="drive-open" hidden>Open</button>
+              <button class="button" id="drive-connect">Connect Google Drive</button>
+              <button class="button" id="drive-disconnect" hidden>Disconnect</button>
+            </div>
+          </div>
           <div class="keep-row">
             <label for="keep-input">Keep the newest</label>
             <input id="keep-input" type="number" min="0" max="100" step="1">

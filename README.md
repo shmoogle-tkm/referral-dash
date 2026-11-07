@@ -29,8 +29,26 @@ Settings > Advanced sets what reports cover (the last N days, or a date range)
 and what they compare with (N days before, or a date range). The main screen
 shows the result in one line; fixed dates stay until they are changed there.
 
-There is no cloud upload. To share reports, choose an output folder that
-Google Drive for desktop, OneDrive, or a shared drive already syncs.
+5. **Uploads to Google Drive** (optional). Connect Google Drive opens Google's
+   sign-in and folder picker in one browser trip. Each run uploads its pictures
+   there, and sets beyond the keep count go to the Drive trash. The app asks only
+   for `drive.file`, so it can see only that folder and what it made there.
+
+## Google Drive setup
+
+The option appears only in builds that include `drive_oauth_client.json`, which
+is never committed. To avoid Google's unverified-app warning:
+
+1. Create a new Google Cloud project. Enable the Google Drive API and the Google
+   Picker API.
+2. Under Google Auth platform, set the audience to External, add only the
+   `.../auth/drive.file` scope under Data Access, and click **Publish app**. In
+   Testing mode Google shows a warning and sign-ins expire after 7 days.
+3. Create a client of type **Desktop app**, download its JSON, and save it as
+   `drive_oauth_client.json` in the repository root before running `build.ps1`.
+
+Mission Google accounts managed by an organization can still be blocked by their
+administrator.
 
 The UI is a local web page served on `127.0.0.1` behind a per-launch session
 token and shown in an Edge or Chrome app window, like the Data Hub control
@@ -49,6 +67,7 @@ first-time setup; rarely needed options sit under Settings > Advanced.
 | `referral_dash/district_summary.py` | District Summary renderer |
 | `referral_dash/period.py` | The report's date range and the range it compares with |
 | `referral_dash/cleanup.py` | Keeps the newest report sets; prunes browser caches |
+| `referral_dash/drive.py` | Google sign-in, folder pick, upload, moving old sets to the trash |
 | `referral_dash/credentials.py` | Church account in Windows Credential Manager |
 
 ## Develop

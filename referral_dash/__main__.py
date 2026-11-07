@@ -19,6 +19,7 @@ def check_imports():
     import keyring.backends.Windows  # noqa: F401
     import referral_dash.tableau.download  # noqa: F401
     import referral_dash.app  # noqa: F401
+    import referral_dash.drive  # noqa: F401
     webdriver.ChromeOptions(), webdriver.EdgeOptions()
 
 

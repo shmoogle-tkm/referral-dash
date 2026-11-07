@@ -22,7 +22,7 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from . import credentials
+from . import credentials, drive
 from .cleanup import prune_app_data, prune_reports, report_runs
 from .engine import generate_reports
 from .district_summary import period_label
@@ -44,6 +44,7 @@ WINDOW_ATTEMPTS = 3
 KEEP_DOWNLOADS = 3
 RECENT_RUNS = 8
 STEPS = [("download", "Get referrals"), ("render", "Make dashboards"), ("summaries", "District summaries")]
+UPLOAD_STEP = ("upload", "Upload to Drive")
 
 
 def default_output_folder():
@@ -64,6 +65,7 @@ class Controller:
         self.ui_tasks = queue.Queue()
         self.last_seen = time.monotonic()
         self.window_connected = False
+        self.drive_state = {"connecting": False, "error": ""}
 
     def seen(self):
         self.last_seen = time.monotonic()
@@ -76,6 +78,7 @@ class Controller:
         output = settings["output_folder"] or str(default_output_folder())
         with self.lock:
             run = json.loads(json.dumps(self.run)) if self.run else None
+            drive_state = dict(self.drive_state)
         return {
             "version": VERSION, "timezones": TIMEZONES, "settings": settings,
             "configured": is_configured(settings), "suggested_timezone": suggested_timezone(),
@@ -83,6 +86,9 @@ class Controller:
             "account": {"email": login.email, "username": login.username, "saved": login.complete},
             "run": run, "recent": self.recent(output),
             "plan": self.plan(settings),
+            "drive": {**drive_state, "available": drive.available(), "folder_name": settings["drive_upload_folder_name"],
+                      "connected": bool(settings["drive_upload_folder_id"]),
+                      "folder_link": drive.folder_link(settings["drive_upload_folder_id"]) if settings["drive_upload_folder_id"] else ""},
         }
 
     @staticmethod
@@ -135,6 +141,32 @@ class Controller:
     def save_account(self, body):
         credentials.save_login(str(body.get("email", "")), str(body.get("username", "")), str(body.get("password", "")))
 
+    # ----- Google Drive -----
+    def connect_drive(self):
+        """Sign-in happens in the browser, so it runs apart from the window's requests."""
+        with self.lock:
+            if self.drive_state["connecting"]:
+                return
+            self.drive_state.update(connecting=True, error="")
+
+        def work():
+            error = ""
+            try:
+                folder = drive.connect()
+                save_settings({**load_settings(), "drive_upload_folder_id": folder["id"], "drive_upload_folder_name": folder["name"]})
+            except Exception as exc:
+                traceback.print_exc()
+                error = str(exc)
+            with self.lock:
+                self.drive_state.update(connecting=False, error=error)
+        threading.Thread(target=work, daemon=True).start()
+
+    def disconnect_drive(self):
+        drive.disconnect()
+        save_settings({**load_settings(), "drive_upload_folder_id": "", "drive_upload_folder_name": ""})
+        with self.lock:
+            self.drive_state.update(error="")
+
     def pick_output_folder(self):
         folder = self.ask_ui("folder")
         if folder:
@@ -172,13 +204,16 @@ class Controller:
             filename = self.ask_ui("file")
             if not filename:
                 return None
+        # The sample's made-up people never leave this computer.
+        uploads = source != "sample" and bool(settings["drive_upload_folder_id"])
         with self.lock:
             if self.run and self.run["status"] == "running":
                 raise ValueError("A run is already in progress.")
             self.run = {"id": secrets.token_hex(4), "status": "running", "source": source,
                         "started": datetime.now(timezone.utc).isoformat(), "finished": None,
                         "message": "Starting...", "attention": "", "percent": 1, "error": "", "result": None,
-                        "steps": [{"id": i, "label": label, "state": "pending", "detail": ""} for i, label in STEPS]}
+                        "steps": [{"id": i, "label": label, "state": "pending", "detail": ""} for i, label in
+                                  STEPS + ([UPLOAD_STEP] if uploads else [])]}
             if source != "tableau":
                 self._step("download", "done", "Sample data" if source == "sample" else Path(filename).name)
         threading.Thread(target=self._work, args=(source, filename, settings, login, period), daemon=True).start()
@@ -240,13 +275,16 @@ class Controller:
             compared = facts["comparison_period"]
             self._step("summaries", "done", f"{facts['district_summaries']} districts" +
                        (f" · vs {compared}" if compared else " · comparison dates not in this file"))
+            link, drive_error = None, ""
+            if any(step["id"] == "upload" for step in self.run["steps"]):
+                link, drive_error = self._upload(folder, settings)
             removed = prune_reports(output, 1 if source == "sample" else settings["keep_reports"])
             with self.lock:
                 self.run.update(status="done", percent=100, finished=datetime.now(timezone.utc).isoformat(),
                                 message="Finished", result={"folder": str(folder), "images": facts["images"],
                                 "dashboards": facts["images"] - facts["district_summaries"],
                                 "summaries": facts["district_summaries"], "referrals": facts["referrals"],
-                                "period": facts["period"], "compared_with": compared, "removed": 0 if source == "sample" else len(removed)})
+                                "period": facts["period"], "compared_with": compared, "drive_link": link, "drive_error": drive_error, "removed": 0 if source == "sample" else len(removed)})
         except Exception as exc:
             traceback.print_exc()
             self._step(current, "failed", "")
@@ -254,7 +292,26 @@ class Controller:
                 self.run.update(status="failed", finished=datetime.now(timezone.utc).isoformat(),
                                 message="Run failed", error=str(exc) or type(exc).__name__)
 
+    def _upload(self, folder, settings):
+        """A failed upload must not lose the reports, which are already saved on this computer."""
+        current = settings["drive_upload_folder_id"]
+        self._step("upload", "active")
+        try:
+            link = drive.upload_run(folder, current, lambda m, done=None, total=None:
+                                    self._progress(m, 82 + 17 * done / total if total else None))
+            drive.prune_uploads(current, settings["keep_reports"])
+            self._step("upload", "done", settings["drive_upload_folder_name"])
+            return link, ""
+        except Exception as exc:
+            traceback.print_exc()
+            self._step("upload", "failed", "Reports are still on this computer")
+            return None, str(exc)
+
     def open_target(self, target):
+        # Links to Drive open in the browser; everything else must be a folder here.
+        if target.startswith(drive.FOLDER_LINK):
+            webbrowser.open(target)
+            return
         path = Path(target)
         # Only folders: the window never needs to launch a file.
         if path.is_dir():
@@ -323,6 +380,8 @@ class Handler(BaseHTTPRequestHandler):
             "/api/account": lambda: c.save_account(body),
             "/api/account/forget": credentials.forget_login,
             "/api/output-folder": c.pick_output_folder,
+            "/api/drive/connect": c.connect_drive,
+            "/api/drive/disconnect": c.disconnect_drive,
             "/api/run": lambda: c.start_run(str(body.get("source", "tableau")), bool(body.get("watch"))),
             "/api/open": lambda: c.open_target(str(body.get("target", ""))),
         }

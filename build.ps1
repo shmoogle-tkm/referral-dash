@@ -9,6 +9,7 @@ if ($LASTEXITCODE -ne 0) { throw "Dependency install failed." }
 .\.venv\Scripts\python.exe -m unittest discover -s tests
 if ($LASTEXITCODE -ne 0) { throw "Tests failed; nothing was built." }
 
+if (-not (Test-Path drive_oauth_client.json)) { Write-Warning "drive_oauth_client.json is missing: this build hides Connect Google Drive." }
 $version = (.\.venv\Scripts\python.exe -c "from referral_dash.settings import VERSION; print(VERSION)").Trim()
 .\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean ReferralDash.spec
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed." }

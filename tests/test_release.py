@@ -443,6 +443,266 @@ class CleanupTests(Isolated):
         self.assertFalse((home / "google-token.json").exists())
 
 
+class FakeGoogle:
+    """A stand-in for Google's sign-in and Drive servers that records what they were asked."""
+
+    def __init__(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        import threading
+        fake = self
+        self.items = {"picked": {"name": "Weekly Dashboards", "mimeType": "application/vnd.google-apps.folder",
+                                 "capabilities": {"canAddChildren": True}, "parents": []}}
+        self.token_requests, self.fail_uploads, self.next_id, self.lock = [], 0, 0, threading.Lock()
+        self.flaky, self.refused_token = 0, False
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                pass
+
+            def reply(self, status, body):
+                data = json.dumps(body).encode()
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def body(self):
+                return self.rfile.read(int(self.headers.get("Content-Length") or 0))
+
+            def add(self, item):
+                with fake.lock:
+                    fake.next_id += 1
+                    file_id = f"id{fake.next_id}"
+                    fake.items[file_id] = item
+                return self.reply(200, {"id": file_id})
+
+            def do_POST(self):
+                body = self.body()
+                if self.path.startswith("/token"):
+                    from urllib.parse import parse_qs
+                    fields = {k: v[0] for k, v in parse_qs(body.decode()).items()}
+                    fake.token_requests.append(fields)
+                    if fake.refused_token:
+                        return self.reply(400, {"error": "invalid_grant", "error_description": "Token has been expired or revoked."})
+                    return self.reply(200, {"access_token": "access", "expires_in": 3600, "refresh_token": "refresh"})
+                if self.headers.get("Authorization") != "Bearer access":
+                    return self.reply(401, {"error": {"message": "no token"}})
+                if self.path.startswith("/upload"):
+                    if fake.flaky:
+                        fake.flaky -= 1
+                        return self.reply(503, {"error": {"message": "try later"}})
+                    if fake.fail_uploads:
+                        return self.reply(403, {"error": {"message": "storage quota exceeded"}})
+                    meta = json.loads(body.split(b"\r\n\r\n", 2)[1].split(b"\r\n")[0])
+                    meta["size"] = len(body)
+                    return self.add(meta)
+                return self.add(json.loads(body))
+
+            def do_GET(self):
+                item = fake.items.get(self.path.split("/files/")[-1].split("?")[0])
+                return self.reply(200, item) if item else self.reply(404, {"error": {"message": "not found"}})
+
+            def do_PATCH(self):
+                body = json.loads(self.body())
+                item = fake.items.get(self.path.split("/files/")[-1].split("?")[0])
+                if item is None:
+                    return self.reply(404, {"error": {"message": "not found"}})
+                item.update(body)
+                return self.reply(200, {"id": "ok"})
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+class DriveTests(Isolated):
+    def setUp(self):
+        super().setUp()
+        from referral_dash import drive
+        self.drive = drive
+        self.google = FakeGoogle()
+        self.addCleanup(self.google.close)
+        self.vault = {}
+        keyring = patch("referral_dash.credentials.keyring")
+        fake = keyring.start()
+        self.addCleanup(keyring.stop)
+        fake.get_password.side_effect = lambda service, name: self.vault.get(name)
+        fake.set_password.side_effect = lambda service, name, value: self.vault.__setitem__(name, value)
+        fake.delete_password.side_effect = lambda service, name: self.vault.pop(name, None)
+        fake.errors.KeyringError = RuntimeError
+        fake.errors.PasswordDeleteError = KeyError
+        client = Path(self.home.name) / "client"
+        client.mkdir()
+        (client / drive.CLIENT_FILE).write_text(json.dumps({"installed": {"client_id": "cid", "client_secret": "sec"}}))
+        for patcher in (patch.object(drive, "app_directory", return_value=client),
+                        patch.object(drive, "TOKEN_URL", self.google.base + "/token"),
+                        patch.object(drive, "API_URL", self.google.base + "/files"),
+                        patch.object(drive, "UPLOAD_URL", self.google.base + "/upload"),
+                        patch.object(drive.time, "sleep")):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def browser(self, **answer):
+        """Plays the person's browser: Google sends it back to the app after the Picker."""
+        import threading
+        from urllib.parse import parse_qs, urlencode, urlsplit
+        self.asked = {}
+
+        def open_browser(url):
+            self.asked.update({k: v[0] for k, v in parse_qs(urlsplit(url).query).items()})
+            query = urlencode({"state": self.asked["state"], **answer})
+            threading.Thread(target=lambda: urlopen(f"{self.asked['redirect_uri']}?{query}").read(), daemon=True).start()
+        return open_browser
+
+    def connect(self):
+        return self.drive.connect(self.browser(code="abc", picked_file_ids="picked"))
+
+    def make_run(self, parent, name="Referral Reports - Oct 1 to Oct 8, 2026"):
+        run = Path(parent) / name
+        for folder, pictures in (("1. Areas", 3), ("5. District Summaries", 2)):
+            (run / folder).mkdir(parents=True)
+            for index in range(pictures):
+                (run / folder / f"{index}.jpg").write_bytes(b"picture" * 50)
+        (run / "run-summary.json").write_text("{}")
+        return run
+
+    def test_sign_in_asks_only_for_the_permission_without_a_warning(self):
+        self.assertEqual(self.connect(), {"id": "picked", "name": "Weekly Dashboards"})
+        self.assertEqual(self.asked["scope"], "https://www.googleapis.com/auth/drive.file")
+        self.assertEqual((self.asked["trigger_onepick"], self.asked["allow_folder_selection"], self.asked["prompt"], self.asked["access_type"]),
+                         ("true", "true", "consent", "offline"))
+        self.assertEqual(self.asked["mimetypes"], self.drive.FOLDER_TYPE)
+        self.assertTrue(self.asked["redirect_uri"].startswith("http://127.0.0.1:"))
+        self.assertEqual(self.google.token_requests[0]["redirect_uri"], self.asked["redirect_uri"])
+        self.assertIn("code_verifier", self.google.token_requests[0])
+        self.assertEqual(self.vault["google-drive.v1"], "refresh")  # In Credential Manager, not a file.
+        self.assertFalse((Path(self.home.name) / "google-token.json").exists())
+
+    def test_cancelling_or_picking_nothing_connects_nothing(self):
+        with self.assertRaisesRegex(self.drive.DriveError, "cancelled"):
+            self.drive.connect(self.browser(error="access_denied"))
+        with self.assertRaisesRegex(self.drive.DriveError, "No folder"):
+            self.drive.connect(self.browser(code="abc"))
+        self.assertEqual(self.vault, {})
+
+    def test_a_wrong_state_is_ignored(self):
+        with patch.object(self.drive, "SIGN_IN_SECONDS", 2):
+            def forged(url):
+                from urllib.parse import parse_qs, urlsplit
+                redirect = parse_qs(urlsplit(url).query)["redirect_uri"][0]
+                import threading
+                def visit():
+                    try:
+                        urlopen(f"{redirect}?state=forged&code=evil&picked_file_ids=picked").read()
+                    except Exception:
+                        pass
+                threading.Thread(target=visit, daemon=True).start()
+            with self.assertRaisesRegex(self.drive.DriveError, "timed out"):
+                self.drive.connect(forged)
+        self.assertEqual(self.google.token_requests, [])
+
+    def test_picking_a_file_or_a_read_only_folder_is_refused(self):
+        self.google.items["picked"]["mimeType"] = "image/jpeg"
+        with self.assertRaisesRegex(self.drive.DriveError, "isn't a folder"):
+            self.connect()
+        self.assertEqual(self.vault, {})
+        self.google.items["picked"].update(mimeType=self.drive.FOLDER_TYPE, capabilities={"canAddChildren": False})
+        with self.assertRaisesRegex(self.drive.DriveError, "can't add files"):
+            self.connect()
+
+    def test_upload_recreates_the_report_set_and_skips_the_summary_file(self):
+        self.connect()
+        calls = []
+        with tempfile.TemporaryDirectory() as folder:
+            link = self.drive.upload_run(self.make_run(folder), "picked", lambda m, done=None, total=None: calls.append((done, total)))
+        folders = {k: v for k, v in self.google.items.items() if v["mimeType" if "mimeType" in v else "name"] == self.drive.FOLDER_TYPE and k != "picked"}
+        names = {v["name"] for v in folders.values()}
+        self.assertEqual(names, {"Referral Reports - Oct 1 to Oct 8, 2026", "1. Areas", "5. District Summaries"})
+        files = [v for v in self.google.items.values() if "size" in v]
+        self.assertEqual(len(files), 5)
+        self.assertNotIn("run-summary.json", {f["name"] for f in files})
+        self.assertEqual(calls[-1], (5, 5))
+        root = next(k for k, v in folders.items() if v["name"].startswith("Referral Reports"))
+        self.assertEqual(self.google.items[root]["parents"], ["picked"])
+        self.assertTrue(link.endswith(root))
+
+    def test_temporary_google_errors_are_retried(self):
+        self.connect()
+        self.google.flaky = 3
+        with tempfile.TemporaryDirectory() as folder:
+            self.drive.upload_run(self.make_run(folder), "picked")
+        self.assertEqual(sum("size" in v for v in self.google.items.values()), 5)
+
+    def test_rate_limits_reported_as_403_are_retried(self):
+        from urllib.error import HTTPError
+        import io
+        attempts = []
+
+        def fake_open(request, timeout):
+            attempts.append(request.full_url)
+            if len(attempts) < 3:
+                raise HTTPError(request.full_url, 403, "Forbidden", {}, io.BytesIO(b'{"error": {"message": "User Rate Limit Exceeded"}}'))
+            return unittest.mock.MagicMock(**{"__enter__.return_value.read.return_value": b'{"id": "ok"}'})
+        with patch.object(self.drive, "urlopen", side_effect=fake_open):
+            self.assertEqual(self.drive._send("POST", "https://example.test/x")["id"], "ok")
+        self.assertEqual(len(attempts), 3)
+
+    def test_failed_upload_puts_the_partial_set_in_the_trash(self):
+        self.connect()
+        self.google.fail_uploads = 1
+        with tempfile.TemporaryDirectory() as folder:
+            with self.assertRaisesRegex(self.drive.DriveError, "quota"):
+                self.drive.upload_run(self.make_run(folder), "picked")
+        root = next(v for v in self.google.items.values() if v["name"].startswith("Referral Reports"))
+        self.assertTrue(root["trashed"])
+        self.assertEqual(self.drive.prune_uploads("picked", 1), 0)  # It was never recorded as an upload.
+
+    def test_only_this_apps_oldest_uploads_go_to_the_trash(self):
+        self.connect()
+        self.google.items["theirs"] = {"name": "Someone's notes", "mimeType": self.drive.FOLDER_TYPE, "parents": ["picked"]}
+        with tempfile.TemporaryDirectory() as folder:
+            for week in range(1, 5):
+                self.drive.upload_run(self.make_run(folder, f"Referral Reports - Week {week}"), "picked")
+            self.assertEqual(self.drive.prune_uploads("picked", 0), 0)  # 0 keeps them all.
+            self.assertEqual(self.drive.prune_uploads("picked", 2), 2)
+            self.assertEqual(self.drive.prune_uploads("picked", 2), 0)
+        state = {v["name"]: v.get("trashed", False) for v in self.google.items.values() if v["name"].startswith("Referral Reports")}
+        self.assertEqual(state, {"Referral Reports - Week 1": True, "Referral Reports - Week 2": True,
+                                 "Referral Reports - Week 3": False, "Referral Reports - Week 4": False})
+        self.assertNotIn("trashed", self.google.items["theirs"])
+
+    def test_a_set_deleted_by_hand_is_forgotten_and_a_refused_one_is_retried(self):
+        self.connect()
+        with tempfile.TemporaryDirectory() as folder:
+            for week in (1, 2, 3):
+                self.drive.upload_run(self.make_run(folder, f"Referral Reports - Week {week}"), "picked")
+        first = next(k for k, v in self.google.items.items() if v["name"].endswith("Week 1"))
+        del self.google.items[first]
+        self.assertEqual(self.drive.prune_uploads("picked", 2), 0)
+        self.assertEqual(len(json.loads((Path(self.home.name) / "drive-uploads.json").read_text())["picked"]), 2)
+
+    def test_lost_connection_says_to_reconnect(self):
+        self.connect()
+        self.google.refused_token = True
+        with tempfile.TemporaryDirectory() as folder, self.assertRaisesRegex(self.drive.DriveError, "connected again"):
+            self.drive.upload_run(self.make_run(folder), "picked")
+        self.vault.clear()
+        self.google.refused_token = False
+        with tempfile.TemporaryDirectory() as folder, self.assertRaisesRegex(self.drive.DriveError, "connected again"):
+            self.drive.upload_run(self.make_run(folder), "picked")
+
+    def test_a_copy_without_the_client_file_hides_the_option(self):
+        with patch.object(self.drive, "app_directory", return_value=Path(self.home.name)), \
+                patch.object(self.drive, "install_directory", return_value=Path(self.home.name)):
+            self.assertFalse(self.drive.available())
+            with self.assertRaisesRegex(self.drive.DriveError, "isn't set up"):
+                self.drive.connect(lambda url: None)
+
+
 class AppTests(Isolated):
     """Drive the local control center the same way the window does."""
 
@@ -530,6 +790,54 @@ class AppTests(Isolated):
         result = self.finish({"source": "sample"})["run"]["result"]
         self.assertEqual(result["compared_with"], "Sep 24, 2026 – Oct 1, 2026")
         self.assertEqual(result["referrals"], 8)
+
+    def connected(self):
+        from referral_dash.settings import load_settings, save_settings
+        save_settings({**load_settings(), "mission": "Sample Mission", "output_folder": self.output.name,
+                       "drive_upload_folder_id": "folder1", "drive_upload_folder_name": "Weekly"})
+
+    def test_runs_upload_after_saving_and_a_failure_keeps_the_reports(self):
+        self.connected()
+        with patch.object(self.app.drive, "upload_run", return_value=self.app.drive.folder_link("new1")) as upload, \
+                patch.object(self.app.drive, "prune_uploads", return_value=1) as prune, \
+                patch.object(self.controller, "ask_ui", return_value=str(SAMPLE)):
+            state = self.finish({"source": "file"})
+        result = state["run"]["result"]
+        self.assertEqual(result["drive_link"], self.app.drive.folder_link("new1"))
+        self.assertEqual(upload.call_args.args[1], "folder1")
+        self.assertEqual(prune.call_args.args, ("folder1", 8))
+        self.assertEqual(state["run"]["steps"][-1]["detail"], "Weekly")
+        with patch.object(self.app.drive, "upload_run", side_effect=self.app.drive.DriveError("Drive said no.")), \
+                patch.object(self.controller, "ask_ui", return_value=str(SAMPLE)):
+            state = self.finish({"source": "file"})
+        result = state["run"]["result"]
+        self.assertEqual((result["drive_link"], result["drive_error"]), (None, "Drive said no."))
+        self.assertTrue(Path(result["folder"]).is_dir())
+        self.assertEqual(state["run"]["steps"][-1]["state"], "failed")
+
+    def test_sample_data_never_uploads(self):
+        self.connected()
+        with patch.object(self.app.drive, "upload_run") as upload:
+            state = self.finish({"source": "sample"})
+        upload.assert_not_called()
+        self.assertNotIn("upload", [s["id"] for s in state["run"]["steps"]])
+
+    def test_settings_cannot_set_the_drive_folder_and_disconnect_clears_it(self):
+        self.call("/api/settings", {"mission": "Sample Mission", "drive_upload_folder_id": "sneaky"})
+        self.assertFalse(self.call("/api/state")[1]["drive"]["connected"])
+        self.connected()
+        drive_state = self.call("/api/state")[1]["drive"]
+        self.assertEqual((drive_state["connected"], drive_state["folder_name"]), (True, "Weekly"))
+        with patch("referral_dash.credentials.keyring.errors.PasswordDeleteError", KeyError):
+            self.assertEqual(self.call("/api/drive/disconnect", {})[0], 200)
+        self.assertFalse(self.call("/api/state")[1]["drive"]["connected"])
+
+    def test_only_drive_links_open_in_the_browser(self):
+        with patch.object(self.app.webbrowser, "open") as opened, patch.object(self.app.os, "startfile", create=True) as started:
+            self.call("/api/open", {"target": self.app.drive.folder_link("abc")})
+            self.call("/api/open", {"target": "https://evil.example/"})
+        opened.assert_called_once_with(self.app.drive.folder_link("abc"))
+        started.assert_not_called()
 
     def test_saved_dates_reach_the_download_and_the_report(self):
         from referral_dash.credentials import LoginCredentials

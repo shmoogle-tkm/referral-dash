@@ -7,7 +7,7 @@ import time
 from datetime import date, datetime
 from pathlib import Path
 
-VERSION = "2.2.3"
+VERSION = "2.3.0"
 APP_NAME = "Referral Dash"
 TIMEZONES = ["UTC", "EST", "CST", "MST", "MST_NO_DST", "PST", "AKST", "HST"]
 # The mission finding workbook used by the Referral Care Data Hub.
@@ -20,7 +20,9 @@ DEFAULTS = {"mission": "Your Mission", "lightning": 5, "pepper": 20,
             # What reports cover: the last `lookback_days` days, or fixed dates.
             "report_mode": "days", "report_start": "", "report_end": "",
             # What the change arrows compare with: the same range `compare_days` earlier, or fixed dates.
-            "compare_mode": "days", "compare_days": 7, "compare_start": "", "compare_end": ""}
+            "compare_mode": "days", "compare_days": 7, "compare_start": "", "compare_end": "",
+            # The Google Drive folder picked when connecting; blank means no uploads.
+            "drive_upload_folder_id": "", "drive_upload_folder_name": ""}
 # The settings that change the numbers; a report's run-summary.json records them.
 METRIC_KEYS = ("mission", "start_time", "cutoff_time", "timezones")
 # Retired settings, dropped when an older settings file is read.
@@ -101,6 +103,8 @@ def validate_settings(data):
     result["tableau_view_url"] = url
     for key in RETIRED_KEYS:
         result.pop(key, None)
+    result["drive_upload_folder_id"] = str(result["drive_upload_folder_id"]).strip()
+    result["drive_upload_folder_name"] = str(result["drive_upload_folder_name"]).strip()
     result["show_browser"] = bool(result["show_browser"])
     result["output_folder"] = str(result["output_folder"]).strip()
     result["keep_reports"] = int(result["keep_reports"])
