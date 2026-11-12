@@ -31,7 +31,8 @@ before. The main screen shows the dates in the line above Run now. To change
 them, open Settings > Advanced:
 - Reports cover: the past so many days, or a date range.
 - Compare to: so many days before, or a date range.
-- District summaries cover: the last so many days of the report (7 by default).
+- District summaries cover: the last so many days of the report (7 by default),
+  or a date range inside the report's dates.
 For August 8 to September 8 compared 7 days before, the arrows compare with
 August 1 to September 1. A past range shows numbers as they stood on its end
 date. A date range stays set until you change it back.

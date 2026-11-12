@@ -135,11 +135,12 @@ class Controller:
     # ----- settings -----
     def save_settings(self, body):
         current = load_settings()
-        allowed = {"mission", "lightning", "pepper", "start_time", "cutoff_time", "timezones", "timezone_auto", "summary_days",
+        allowed = {"mission", "lightning", "pepper", "start_time", "cutoff_time", "timezones", "timezone_auto", "summary_mode", "summary_days", "summary_start", "summary_end",
                    "tableau_view_url", "lookback_days", "show_browser", "keep_reports", "report_mode",
                    "report_start", "report_end", "compare_mode", "compare_days", "compare_start", "compare_end"}
         merged = validate_settings({**current, **{k: v for k, v in body.items() if k in allowed}})
-        settings_period(merged)  # Refuse dates that could not run, while the person is still on the form.
+        # Refuse dates that could not run, while the person is still on the form.
+        summary_period(settings_period(merged), merged)
         return save_settings(merged)
 
     def save_account(self, body):

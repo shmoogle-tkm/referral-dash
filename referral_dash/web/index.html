@@ -182,7 +182,14 @@
               </div>
               <div class="setting-row">
                 <span class="setting-label">District summaries cover</span>
-                <label class="segment segment-plain"><span>Past</span><input class="days-input" name="summary_days" type="number" min="1" max="365" aria-label="District summary days"><span>days</span></label>
+                <div class="segmented" role="radiogroup" aria-label="District summaries cover">
+                  <label class="segment"><input type="radio" name="summary_mode" value="days"><span>Past</span><input class="days-input" name="summary_days" type="number" min="1" max="365" aria-label="Days"><span>days</span></label>
+                  <label class="segment"><input type="radio" name="summary_mode" value="range"><span>Date range</span></label>
+                </div>
+              </div>
+              <div class="date-pair" data-mode="summary_mode">
+                <label>From<input name="summary_start" type="date"></label>
+                <label>To<input name="summary_end" type="date"></label>
               </div>
               <p class="advanced-note" id="dates-preview"></p>
             </section>

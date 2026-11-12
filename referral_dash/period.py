@@ -80,18 +80,28 @@ def make_period(settings, start=None, end=None, compare_start=None, compare_end=
 
 
 def summary_period(period, settings):
-    """What district summaries cover: the report's last `summary_days`, against the matching days earlier.
+    """What district summaries cover: the report's last `summary_days`, or a chosen range inside the
+    report's dates, against the same days `compare_days` earlier (or the chosen comparison range).
 
-    With a fixed comparison range, that range is used as it is. The report's download already reaches
-    back far enough, because the summary's comparison never starts before the report's.
+    The report's download already reaches back far enough, because the summary sits inside the
+    report and its comparison never starts before the report's.
     """
-    start = max(period.start, period.end - timedelta(days=settings["summary_days"] - 1))
+    if settings["summary_mode"] == "range":
+        start, end = _day(settings["summary_start"], "district summary start"), _day(settings["summary_end"], "district summary end")
+        if start > end:
+            raise ValueError("The district summary start date must be on or before its end date.")
+        if start < period.start or end > period.end:
+            raise ValueError("Choose district summary dates inside the dates the reports cover.")
+    else:
+        start, end = max(period.start, period.end - timedelta(days=settings["summary_days"] - 1)), period.end
+    end_of_day = datetime.combine(end + timedelta(days=1), time.min, tzinfo=period.zone) - timedelta(seconds=1)
+    cutoff = min(end_of_day.astimezone(timezone.utc), period.cutoff)
     # A chosen comparison range is any comparison that isn't simply the report moved back compare_days.
     chosen = settings["compare_mode"] == "range" or period.end - period.baseline_end != timedelta(days=settings["compare_days"])
     if chosen:
-        return Period(start, period.end, period.cutoff, period.zone, period.baseline_start, period.baseline_end)
+        return Period(start, end, cutoff, period.zone, period.baseline_start, period.baseline_end)
     shift = period.end - period.baseline_end
-    return Period(start, period.end, period.cutoff, period.zone, start - shift, period.baseline_end)
+    return Period(start, end, cutoff, period.zone, start - shift, end - shift)
 
 
 def settings_period(settings, now=None):

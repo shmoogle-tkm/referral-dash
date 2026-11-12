@@ -156,6 +156,14 @@ class ReportTests(Isolated):
         # A chosen comparison range is used as it is.
         fixed = summary_period(make_period(settings, "2026-10-01", "2026-10-08", "2026-09-20", "2026-09-26"), settings)
         self.assertEqual((fixed.baseline_start, fixed.baseline_end), (date(2026, 9, 20), date(2026, 9, 26)))
+        # Summaries can also take a date range inside the report's dates, compared the same days earlier.
+        ranged = validate_settings({**settings, "summary_mode": "range", "summary_start": "2026-10-03", "summary_end": "2026-10-05"})
+        chosen = summary_period(make_period(ranged, "2026-10-01", "2026-10-08"), ranged)
+        self.assertEqual((chosen.start, chosen.end, chosen.baseline_start, chosen.baseline_end),
+                         (date(2026, 10, 3), date(2026, 10, 5), date(2026, 9, 30), date(2026, 10, 2)))
+        outside = validate_settings({**settings, "summary_mode": "range", "summary_start": "2026-09-01", "summary_end": "2026-09-05"})
+        with self.assertRaisesRegex(ValueError, "inside the dates"):
+            summary_period(make_period(outside, "2026-10-01", "2026-10-08"), outside)
 
     def test_the_speed_dial_puts_the_goal_at_the_top(self):
         from referral_dash import gauges

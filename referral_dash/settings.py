@@ -8,7 +8,7 @@ from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import available_timezones
 
-VERSION = "2.5.0"
+VERSION = "2.5.1"
 APP_NAME = "Referral Dash"
 # Older settings used these short names; they are stored as the zones they always meant.
 LEGACY_ZONES = {"UTC": "UTC", "EST": "America/New_York", "CST": "America/Chicago", "MST": "America/Denver",
@@ -38,7 +38,7 @@ DEFAULTS = {"mission": "Your Mission", "lightning": 5, "pepper": 20,
             # What the change arrows compare with: the same range `compare_days` earlier, or fixed dates.
             "compare_mode": "days", "compare_days": 7, "compare_start": "", "compare_end": "",
             # District summaries cover the last `summary_days` of the report, against the same days earlier.
-            "summary_days": 7,
+            "summary_mode": "days", "summary_days": 7, "summary_start": "", "summary_end": "",
             # The Google Drive folder picked when connecting; blank means no uploads.
             "drive_upload_folder_id": "", "drive_upload_folder_name": "",
             # Follow this computer's time zone until someone picks one in Settings.
@@ -120,7 +120,8 @@ def validate_settings(data):
     except ValueError as error:
         raise ValueError(f"Select one of the supported time zones. {error}") from error
     for mode, first, last, label in (("report_mode", "report_start", "report_end", "report"),
-                                     ("compare_mode", "compare_start", "compare_end", "comparison")):
+                                     ("compare_mode", "compare_start", "compare_end", "comparison"),
+                                     ("summary_mode", "summary_start", "summary_end", "district summary")):
         if result[mode] not in ("days", "range"):
             raise ValueError(f"Choose how the {label} dates are set.")
         for key in (first, last):
