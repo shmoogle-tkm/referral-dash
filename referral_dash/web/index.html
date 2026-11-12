@@ -33,7 +33,7 @@
         <section class="card run-card">
           <p class="eyebrow" id="run-eyebrow">This week</p>
           <h1 id="run-title">Make this week's reports</h1>
-          <p class="lede" id="run-lede">Signs in to Tableau, downloads your referrals, and makes every dashboard and district summary.</p>
+          <p class="lede" id="run-lede">Opens Tableau for you to sign in, then downloads your referrals and makes every dashboard and district summary.</p>
           <p class="plan-line" id="plan-line"></p>
           <button class="run-button" id="run-button" data-run="tableau">Run now</button>
           <div class="run-alternatives">
@@ -100,9 +100,6 @@
       </main>
 
       <main id="settings-view" class="view" hidden>
-        <section class="welcome" id="welcome">
-          <h1>Set up Referral Dash</h1>
-        </section>
         <div class="settings-head" id="settings-head">
           <button class="ghost-button" data-view="home">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20v-2Z"/></svg>
@@ -111,30 +108,8 @@
           <h1>Settings</h1>
         </div>
 
-        <form class="card form-card" id="account-form">
-          <div class="form-head">
-            <span class="step" id="account-step">1</span>
-            <div>
-              <h2>Church account</h2>
-              <p>Signs in to Tableau for you. Stays on this PC.</p>
-            </div>
-          </div>
-          <div class="fields">
-            <label class="wide">Missionary email<input name="email" type="email" autocomplete="email" required placeholder="Your Tableau sign-in email"></label>
-            <label>Church username<input name="username" autocomplete="username" required></label>
-            <label>Password
-              <span class="password-field">
-                <input name="password" id="account-password" type="password" autocomplete="current-password">
-                <button type="button" class="link-button" id="show-password">Show</button>
-              </span>
-            </label>
-          </div>
-          <div class="form-foot save-foot"><span class="saved-note" id="account-note"></span><button class="button button-primary" type="submit">Save</button></div>
-        </form>
-
         <form class="card form-card" id="mission-form">
           <div class="form-head">
-            <span class="step" id="mission-step">2</span>
             <div>
               <h2>Mission</h2>
               <p id="mission-help">Found in Tableau on your first run.</p>
@@ -147,8 +122,6 @@
           </div>
           <div class="form-foot save-foot"><span class="saved-note" id="mission-note"></span><button class="button button-primary" type="submit">Save</button></div>
         </form>
-
-        <p class="setup-alt" id="setup-alt"><button class="link-button" data-run="sample">Try sample data first</button></p>
 
         <details class="card advanced" id="advanced">
           <summary>
@@ -208,7 +181,6 @@
             <section class="setting-group">
               <h3>Tableau</h3>
               <label>Workbook link<input name="tableau_view_url" required></label>
-              <label class="switch-row"><span>Always show the browser</span><input name="show_browser" type="checkbox" class="switch"></label>
             </section>
 
             <div class="form-foot save-foot"><span></span><button class="button button-primary" type="submit">Save changes</button></div>

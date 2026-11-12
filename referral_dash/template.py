@@ -108,11 +108,17 @@ class DashboardTemplate():
             {"center": (760, 543), "top": f"{percent_attended_church}%", "bottom": "at church"},
         ]
 
-        # Longest waiting first, and only as many names as keep the picture a sensible size.
-        waiting = sorted(uncontacted_people_list or [], key=lambda p: datetime.strptime(p['date'], format_date_pattern))
-        PEOPLE = [{"name": p['name'], "date": datetime.strptime(p['date'], format_date_pattern).strftime("%m/%d"), "area": p['area']}
-                  for p in waiting[:LIST_LIMIT]]
-        unlisted = len(waiting) - len(PEOPLE)
+        # Each area with referrals nobody has tried yet, and how many. No names, for privacy.
+        # Most waiting first, then the area whose oldest referral has waited longest.
+        waiting = uncontacted_people_list or []
+        by_area = {}
+        for p in waiting:
+            when = datetime.strptime(p['date'], format_date_pattern)
+            count, oldest = by_area.get(p['area'], (0, when))
+            by_area[p['area']] = (count + 1, min(oldest, when))
+        AREAS = [{"area": area, "count": count}
+                 for area, (count, _) in sorted(by_area.items(), key=lambda item: (-item[1][0], item[1][1]))][:LIST_LIMIT]
+        unlisted = len(by_area) - len(AREAS)
         list_heading = (f"{len(waiting)} Unattempted Referral{'' if len(waiting) == 1 else 's'}"
                         if waiting else "No Unattempted Referrals")
 
@@ -136,7 +142,7 @@ class DashboardTemplate():
         # LOAD IMAGE & FONTS
         # ======================
         img = Image.open(IMAGE_PATH).convert("RGBA")
-        needed_height = 850 + max(0, math.ceil(len(PEOPLE) / 4) - 1) * 75 + (60 if unlisted else 0)
+        needed_height = 850 + max(0, math.ceil(len(AREAS) / 4) - 1) * 75 + (60 if unlisted else 0)
         if needed_height > img.height:
             expanded = Image.new("RGBA", (img.width, needed_height), img.getpixel((0, img.height - 1)))
             expanded.paste(img, (0, 0))
@@ -338,40 +344,36 @@ class DashboardTemplate():
         draw_centered_text(draw, (760, BOTTOM_LIST_CONFIG["start_y"] - 75),
                            list_heading, bottom_list_font, TEXT_COLOR)
 
-        rows = math.ceil(len(PEOPLE) / BOTTOM_LIST_CONFIG["max_per_row"])
+        rows = math.ceil(len(AREAS) / BOTTOM_LIST_CONFIG["max_per_row"])
         if unlisted:
             more_y = BOTTOM_LIST_CONFIG["start_y"] + rows * BOTTOM_LIST_CONFIG["row_spacing"] - 5
-            draw_centered_text(draw, (760, more_y), f"+ {unlisted} more", small_type2_font, TEXT_COLOR)
+            draw_centered_text(draw, (760, more_y), f"+ {unlisted} more area{'' if unlisted == 1 else 's'}",
+                               small_type2_font, TEXT_COLOR)
 
         for row in range(rows):
-            row_people = PEOPLE[row * BOTTOM_LIST_CONFIG["max_per_row"]:(row + 1) * BOTTOM_LIST_CONFIG["max_per_row"]]
-            count = len(row_people)
+            row_areas = AREAS[row * BOTTOM_LIST_CONFIG["max_per_row"]:(row + 1) * BOTTOM_LIST_CONFIG["max_per_row"]]
+            count = len(row_areas)
 
             usable_width = img.width - 2 * BOTTOM_LIST_CONFIG["horizontal_padding"]
             spacing = usable_width // max(count, 1)
 
             y = BOTTOM_LIST_CONFIG["start_y"] + row * BOTTOM_LIST_CONFIG["row_spacing"]
 
-            for i, person in enumerate(row_people):
+            for i, entry in enumerate(row_areas):
                 x = BOTTOM_LIST_CONFIG["horizontal_padding"] + spacing // 2 + i * spacing
-                name_font = label_font
-                area_font = small_type2_font
+                area_font = label_font
                 for size in range(LABEL_FONT_SIZE, 8, -1):
-                    name_font = ImageFont.truetype(SMALL_FONT_PATH, size)
-                    if draw.textbbox((0, 0), person["name"], font=name_font)[2] <= spacing - 15:
-                        break
-                for size in range(FONT_SMALL_TYPE2, 7, -1):
                     area_font = ImageFont.truetype(SMALL_FONT_PATH, size)
-                    if draw.textbbox((0, 0), f'{person["date"]} - {person["area"]}', font=area_font)[2] <= spacing - 15:
+                    if draw.textbbox((0, 0), entry["area"], font=area_font)[2] <= spacing - 15:
                         break
 
                 draw_centered_stacked_text(
                     draw,
                     (x, y),
-                    person["name"],
-                    f'{person["date"]} • {person["area"]}',
-                    name_font,
+                    entry["area"],
+                    f'{entry["count"]} unattempted',
                     area_font,
+                    small_type2_font,
                     TEXT_COLOR,
                     spacing=10
                 )

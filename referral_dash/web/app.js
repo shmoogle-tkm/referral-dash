@@ -43,7 +43,6 @@ const RUN_ICONS = {
 let state = null;
 let formsFilled = false;
 let view = null;
-let wasReady = null;
 
 async function api(path, body) {
   const response = await fetch(path, {
@@ -167,15 +166,11 @@ function fillForms() {
   $("#timezone-select").innerHTML = zoneOptions();
   // Until the mission is saved, guess the time zone from this computer.
   mission.timezone.value = s.timezone_auto ? "auto" : s.timezones.default;
-  const account = $("#account-form");
-  account.email.value = state.account.email;
-  account.username.value = state.account.username;
   const advanced = $("#advanced-form");
   for (const key of ["lookback_days", "start_time", "cutoff_time", "lightning", "pepper", "tableau_view_url", "report_mode",
                      "report_start", "report_end", "compare_mode", "compare_days", "compare_start", "compare_end", "summary_mode", "summary_days", "summary_start", "summary_end"]) advanced[key].value = s[key];
   renderDateChoices();
   advanced.overrides.value = Object.entries(overrides()).map(([zone, tz]) => `${zone} = ${tz}`).join("\n");
-  advanced.show_browser.checked = s.show_browser;
   $("#keep-input").value = s.keep_reports;
   formsFilled = true;
   loadMissions();
@@ -191,42 +186,24 @@ async function loadMissions() {
   }
 }
 
-function renderSettings(ready) {
-  const setup = !ready;
-  document.body.classList.toggle("is-setup", setup);
-  $("#welcome").hidden = !setup;
-  $("#settings-head").hidden = setup;
-  $("#setup-alt").hidden = !setup;
-  $("#advanced").hidden = setup;
-  // Setup only needs the Church account: the mission comes from Tableau, the time zone from this PC.
-  $("#mission-form").hidden = setup;
-  $("#account-step").hidden = setup;
+// Nothing to set up: the mission comes from Tableau on the first run, the time zone from this PC.
+function renderSettings() {
   $("#mission-help").textContent = state.configured ? "Read from Tableau. Change it only if it's wrong." : "Found in Tableau on your first run.";
-  $("#account-step").textContent = state.account.saved ? "✓" : "1";
-  $("#account-step").classList.toggle("is-done", state.account.saved);
-  $("#mission-step").textContent = state.configured ? "✓" : "2";
-  $("#mission-step").classList.toggle("is-done", state.configured);
-  $("#account-note").textContent = state.account.saved ? "Saved" : "";
-  $("#account-password").placeholder = state.account.saved ? "Saved" : "";
   $("#mission-note").textContent = state.configured ? "Saved" : "";
 }
 
-function renderRunCard(ready, running) {
+function renderRunCard(running) {
   const fixedDates = state.settings.report_mode === "range";
   const last = state.recent.find((run) => run.mission === state.settings.mission);
   const due = !last || Date.now() - new Date(last.generated_utc) >= 6 * DAY;
-  $("#run-eyebrow").textContent = !ready ? "Almost there" : last ? `Last run ${shortDate(last.generated_utc)} · ${daysAgo(last.generated_utc)}` : "First run";
-  $("#run-title").textContent = !ready ? "Finish setup to make reports" : fixedDates ? "Make reports for these dates" : due ? "Make this week's reports" : "This week's reports are done";
-  $("#run-lede").textContent = !ready
-    ? "Add your Church account in Settings. It takes a minute."
-    : "Signs in to Tableau, downloads your referrals, and makes every dashboard and district summary.";
+  $("#run-eyebrow").textContent = last ? `Last run ${shortDate(last.generated_utc)} · ${daysAgo(last.generated_utc)}` : "First run";
+  $("#run-title").textContent = fixedDates ? "Make reports for these dates" : due ? "Make this week's reports" : "This week's reports are done";
   const button = $("#run-button");
   button.disabled = running;
   const fresh = due || fixedDates;
-  button.textContent = running ? "Running…" : !ready ? "Finish setup" : fresh ? "Run now" : "Run again";
-  button.classList.toggle("is-quiet", ready && !fresh && !running);
+  button.textContent = running ? "Running…" : fresh ? "Run now" : "Run again";
+  button.classList.toggle("is-quiet", !fresh && !running);
   const plan = $("#plan-line");
-  plan.hidden = !ready;
   plan.className = "plan-line" + (state.plan.error ? " is-error" : "");
   plan.textContent = state.plan.error ? `Check the dates in Settings > Advanced: ${state.plan.error}`
     : state.plan.period;
@@ -326,7 +303,6 @@ function renderWork(run) {
       (run.result.drive_link ? `<button class="button" data-open="${escapeHtml(run.result.drive_link)}">Open in Drive</button>` : "");
   } else if (run.status === "failed") {
     actions.innerHTML = `<button class="button button-primary" data-run="${escapeHtml(run.source)}">Try again</button>` +
-      (run.source === "tableau" ? `<button class="button" data-run="tableau" data-watch="1">Try again and show the browser</button>` : "") +
       (/mission/i.test(run.error) ? `<button class="button" data-view="settings">Fix mission name</button>` : "");
   } else {
     actions.innerHTML = "";
@@ -357,22 +333,15 @@ function renderReports() {
 function render() {
   const run = state.run;
   const running = run?.status === "running";
-  const ready = state.account.saved;
   const waiting = running && Boolean(run.attention);
-  // Setup comes first; once it is finished, go straight to the run screen.
-  if (view === null) showView(ready ? "home" : "settings");
-  else if (ready && wasReady === false) {
-    showView("home");
-    toast("All set. Click Run now whenever you're ready.");
-  }
-  wasReady = ready;
+  if (view === null) showView("home");
 
   const pill = $("#status-pill");
-  pill.className = "status-pill " + (waiting ? "is-warn" : running ? "is-busy" : run?.status === "failed" ? "is-error" : ready ? "is-ok" : "is-warn");
-  $("#status-text").textContent = waiting ? "Needs you" : running ? "Running" : run?.status === "failed" ? "Last run stopped" : ready ? "Ready" : "Setup needed";
+  pill.className = "status-pill " + (waiting ? "is-warn" : running ? "is-busy" : run?.status === "failed" ? "is-error" : "is-ok");
+  $("#status-text").textContent = waiting ? "Needs you" : running ? "Running" : run?.status === "failed" ? "Last run stopped" : "Ready";
   $("#brand-mission").textContent = state.configured ? state.settings.mission : "Mission reports";
-  renderSettings(ready);
-  renderRunCard(ready, running);
+  renderSettings();
+  renderRunCard(running);
   renderDrive(running);
   renderWork(run);
   renderReports();
@@ -395,11 +364,9 @@ document.addEventListener("click", async (event) => {
   if (target.dataset.view) showView(target.dataset.view);
   if (target.dataset.open) act("/api/open", { target: target.dataset.open });
   if (target.dataset.run) {
-    const ready = state.account.saved;
-    if (target.dataset.run !== "sample" && !ready) return showView("settings");
     showView("home");
     target.disabled = true;
-    await act("/api/run", { source: target.dataset.run, watch: Boolean(target.dataset.watch) });
+    await act("/api/run", { source: target.dataset.run });
     target.disabled = false;
   }
 });
@@ -414,7 +381,7 @@ $$(".segment .days-input").forEach((field) => field.addEventListener("focus", ()
   renderDateChoices();
 }));
 // Save buttons appear once something has changed.
-for (const form of [$("#account-form"), $("#mission-form"), $("#advanced-form")]) {
+for (const form of [$("#mission-form"), $("#advanced-form")]) {
   form.addEventListener("input", () => form.classList.add("is-dirty"));
   form.addEventListener("change", () => form.classList.add("is-dirty"));
 }
@@ -431,11 +398,6 @@ $("#keep-input").addEventListener("change", async (event) => {
   const saved = typed !== "" && await act("/api/settings", { keep_reports: typed }, "Saved.");
   field.value = saved ? Number(typed) : state.settings.keep_reports;
 });
-$("#show-password").addEventListener("click", (event) => {
-  const field = $("#account-password");
-  field.type = field.type === "password" ? "text" : "password";
-  event.target.textContent = field.type === "password" ? "Show" : "Hide";
-});
 
 $("#mission-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -446,15 +408,6 @@ $("#mission-form").addEventListener("submit", async (event) => {
   // Blank means "find it in Tableau", so only a typed name is sent.
   if (form.mission.value.trim()) body.mission = form.mission.value;
   if (await act("/api/settings", body, "Mission saved.")) form.classList.remove("is-dirty");
-});
-
-$("#account-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const form = event.target;
-  if (await act("/api/account", { email: form.email.value, username: form.username.value, password: form.password.value }, "Church account saved.")) {
-    form.password.value = "";
-    form.classList.remove("is-dirty");
-  }
 });
 
 $("#advanced-form").addEventListener("submit", async (event) => {
@@ -473,8 +426,7 @@ $("#advanced-form").addEventListener("submit", async (event) => {
                  summary_start: form.summary_start.value, summary_end: form.summary_end.value,
                  compare_start: form.compare_start.value, compare_end: form.compare_end.value,
                  lookback_days: form.lookback_days.value, start_time: form.start_time.value, cutoff_time: form.cutoff_time.value,
-                 lightning: form.lightning.value, pepper: form.pepper.value, tableau_view_url: form.tableau_view_url.value,
-                 show_browser: form.show_browser.checked };
+                 lightning: form.lightning.value, pepper: form.pepper.value, tableau_view_url: form.tableau_view_url.value };
   if (await act("/api/settings", body, "Advanced settings saved.")) form.classList.remove("is-dirty");
 });
 

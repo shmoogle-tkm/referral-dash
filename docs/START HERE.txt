@@ -1,20 +1,19 @@
 REFERRAL DASH - START HERE
 ==========================
 
-Referral Dash signs in to Tableau for you, downloads your mission's referrals,
-and makes area, district, zone and mission dashboards plus District Summaries.
-Everything runs on this computer.
+Referral Dash opens Tableau for you to sign in, downloads your mission's
+referrals, and makes area, district, zone and mission dashboards plus District
+Summaries. Everything runs on this computer. It never asks for or saves your
+password, and dashboards show areas and counts, never anyone's name.
 
 FIRST TIME (about 2 minutes)
 1. Right-click the ZIP > Extract All. Open the new folder.
 2. Double-click "Referral Dash.exe". The app opens in its own window.
    (Windows may ask you to confirm the first time: More info > Run anyway.)
-3. The app asks for one thing:
-   - Church account: your missionary email, Church username and password.
-     They are saved in Windows Credential Manager on this computer only.
-   That's all setup asks for. The first run finds your mission in Tableau, and
-   the time zone comes from this computer. Both can be changed in Settings >
-   Mission.
+3. There's nothing to set up. Click Run now: a browser window opens at
+   Tableau. Sign in there the way you normally do, and Referral Dash carries
+   on by itself. The first run finds your mission in Tableau, and the time
+   zone comes from this computer. Both can be changed in Settings > Mission.
    Want a preview first? Click "Try sample data".
 
 EVERY WEEK
@@ -59,10 +58,9 @@ Each run makes a folder named for its dates, like
 IF SOMETHING GOES WRONG
 - "Tableau has no mission named ...": it suggests the closest name. Click
   "Fix mission name", correct it, and run again.
-- Sign-in problems: check the Church account in Settings, then click
-  "Try again and show the browser" to watch what happens.
-- Authenticator prompts: a browser window opens by itself; approve the
-  sign-in there and Referral Dash carries on.
+- Signing in: each run opens a browser window at Tableau. Sign in there
+  (including any authenticator step) within 10 minutes. If the browser still
+  remembers you, it skips straight ahead.
 - No Chrome or Edge window can open: install or update Microsoft Edge.
 - Already downloaded a CSV yourself? Click "Use a CSV I downloaded". To get
   the change arrows, choose a date range in Settings > Advanced, and make sure

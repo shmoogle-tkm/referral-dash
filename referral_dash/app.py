@@ -75,7 +75,6 @@ class Controller:
     # ----- state -----
     def state(self):
         settings = load_settings()
-        login = credentials.load_login()
         output = settings["output_folder"] or str(default_output_folder())
         with self.lock:
             run = json.loads(json.dumps(self.run)) if self.run else None
@@ -84,7 +83,6 @@ class Controller:
             "version": VERSION, "timezones": TIMEZONES, "settings": settings,
             "configured": is_configured(settings), "suggested_timezone": suggested_timezone(),
             "output_folder": output,
-            "account": {"email": login.email, "username": login.username, "saved": login.complete},
             "run": run, "recent": self.recent(output),
             "plan": self.plan(settings),
             "today": default_range(settings)[1].isoformat(),
@@ -136,15 +134,12 @@ class Controller:
     def save_settings(self, body):
         current = load_settings()
         allowed = {"mission", "lightning", "pepper", "start_time", "cutoff_time", "timezones", "timezone_auto", "summary_mode", "summary_days", "summary_start", "summary_end",
-                   "tableau_view_url", "lookback_days", "show_browser", "keep_reports", "report_mode",
+                   "tableau_view_url", "lookback_days", "keep_reports", "report_mode",
                    "report_start", "report_end", "compare_mode", "compare_days", "compare_start", "compare_end"}
         merged = validate_settings({**current, **{k: v for k, v in body.items() if k in allowed}})
         # Refuse dates that could not run, while the person is still on the form.
         summary_period(settings_period(merged), merged)
         return save_settings(merged)
-
-    def save_account(self, body):
-        credentials.save_login(str(body.get("email", "")), str(body.get("username", "")), str(body.get("password", "")))
 
     # ----- Google Drive -----
     def connect_drive(self):
@@ -191,20 +186,14 @@ class Controller:
         return answer.get()
 
     # ----- runs -----
-    def start_run(self, source, watch=False):
-        """`watch` shows the Tableau browser for this run only, e.g. to see why sign-in failed.
+    def start_run(self, source):
+        """A Tableau run opens the browser for the person to sign in; nothing about their account is kept.
 
         A CSV is reported whole unless fixed report dates are set, since only its author knows what it covers.
         """
         settings = load_settings()
-        if watch:
-            settings = {**settings, "show_browser": True}
-        login = credentials.load_login()
-        if source != "sample":
-            if source == "file" and not is_configured(settings):
-                raise ValueError("Run from Tableau once so Referral Dash can find your mission, or type it under Settings > Mission.")
-            if source == "tableau" and not login.complete:
-                raise ValueError("Open Settings and save the Church account used for Tableau.")
+        if source == "file" and not is_configured(settings):
+            raise ValueError("Run from Tableau once so Referral Dash can find your mission, or type it under Settings > Mission.")
         if source == "sample":
             # The sample's own dates, so "Try sample data" looks the same whatever the settings say.
             period = make_period({**settings, "compare_days": 7}, *SAMPLE_RANGE)
@@ -227,7 +216,7 @@ class Controller:
                                   STEPS + ([UPLOAD_STEP] if uploads else [])]}
             if source != "tableau":
                 self._step("download", "done", "Sample data" if source == "sample" else Path(filename).name)
-        threading.Thread(target=self._work, args=(source, filename, settings, login, period), daemon=True).start()
+        threading.Thread(target=self._work, args=(source, filename, settings, period), daemon=True).start()
         return self.run["id"]
 
     def _step(self, step_id, state, detail=None):
@@ -246,11 +235,11 @@ class Controller:
                 self.run["percent"] = max(self.run["percent"], min(99, round(percent)))
 
     def _attention(self, message):
-        """The run is waiting on the person, e.g. for an authenticator approval."""
+        """The run is waiting on the person, e.g. to sign in to Tableau."""
         with self.lock:
             self.run["attention"] = message
 
-    def _work(self, source, filename, settings, login, period):
+    def _work(self, source, filename, settings, period):
         current = "download"
         try:
             output = sample_folder() if source == "sample" else Path(settings["output_folder"] or default_output_folder())
@@ -263,7 +252,7 @@ class Controller:
                     # The reports are titled with it, and later runs skip looking it up.
                     settings["mission"] = name
                     save_settings({**load_settings(), "mission": name})
-                filename = download_dashboard(settings, login, downloads, period, lambda m: self._progress(m),
+                filename = download_dashboard(settings, downloads, period, lambda m: self._progress(m),
                                               self._attention, found)
                 for old in sorted(downloads.glob("tableau_export_*.csv"))[:-KEEP_DOWNLOADS]:
                     old.unlink(missing_ok=True)
@@ -397,13 +386,11 @@ class Handler(BaseHTTPRequestHandler):
         actions = {
             "/api/heartbeat": lambda: None,
             "/api/settings": lambda: c.save_settings(body) and None,
-            "/api/account": lambda: c.save_account(body),
-            "/api/account/forget": credentials.forget_login,
             "/api/output-folder": c.pick_output_folder,
             "/api/drive/connect": c.connect_drive,
             "/api/drive/cancel": c.cancel_drive,
             "/api/drive/disconnect": c.disconnect_drive,
-            "/api/run": lambda: c.start_run(str(body.get("source", "tableau")), bool(body.get("watch"))),
+            "/api/run": lambda: c.start_run(str(body.get("source", "tableau"))),
             "/api/open": lambda: c.open_target(str(body.get("target", ""))),
         }
         action = actions.get(self.path)
@@ -521,6 +508,8 @@ def main():
         return
     # No other copy is running, so the browser profiles are free to tidy.
     prune_app_data()
+    # People sign in to Tableau themselves now; remove any Church account an older copy saved.
+    credentials.forget_login()
     controller = Controller()
     token = secrets.token_urlsafe(32)
     handler = type("BoundHandler", (Handler,), {"controller": controller, "token": token})

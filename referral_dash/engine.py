@@ -226,7 +226,8 @@ def generate_reports(filename, output_parent, settings, progress=lambda message,
             sequence += 1
         used.add(str(candidate).casefold())
         progress(f"Creating {title}...", image_count, total)
-        uncontacted = [{"name": p.name, "date": p.first_referral_event_date, "area": p.area}
+        # Only the area and how long it has waited: no one's name goes on a picture.
+        uncontacted = [{"date": p.first_referral_event_date, "area": p.area}
                        for p in group.referrals_without_contact_attempt]
         template.buildImage(title, group.median_response_time, group.percent_found,
                             group.total_referrals, group.percent_contacted,

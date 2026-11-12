@@ -198,20 +198,20 @@ class ReportTests(Isolated):
             self.assertLess(green, 120)
             self.assertLess(sum(fast.getpixel(spot)), 200)
 
-    def test_a_long_unattempted_list_stops_growing_after_twenty_names(self):
+    def test_a_long_unattempted_list_stops_growing_after_twenty_areas(self):
         heights = {}
         with tempfile.TemporaryDirectory() as folder:
             for count in (8, 21, 36, 200):
                 image = Path(folder) / f"{count}.png"
-                people = [{"name": f"Example Person {i}", "date": "10/01/2026 02:00:00 PM", "area": "Sample Area"} for i in range(count)]
+                people = [{"date": "10/01/2026 02:00:00 PM", "area": f"Area {i}"} for i in range(count)]
                 engine.DashboardTemplate().buildImage("Fictional sample", None, 0, count, 0, 0, 0, people, image)
                 with Image.open(image) as value:
                     heights[count] = value.height
         self.assertGreater(heights[21], heights[8])  # More rows, up to the cap.
-        self.assertEqual(heights[21], heights[36])  # Past 20 names, only "+ N more" changes.
+        self.assertEqual(heights[21], heights[36])  # Past 20 areas, only "+ N more areas" changes.
         self.assertEqual(heights[36], heights[200])
 
-    def test_the_longest_waiting_are_listed_first(self):
+    def test_the_list_shows_areas_and_counts_never_names(self):
         from referral_dash import template
         drawn = []
         real = template.ImageDraw.ImageDraw.text
@@ -219,14 +219,30 @@ class ReportTests(Isolated):
         def record(draw, xy, text, *args, **kwargs):
             drawn.append(text)
             return real(draw, xy, text, *args, **kwargs)
-        people = [{"name": f"Waited {day}", "date": f"10/{day:02d}/2026 02:00:00 PM", "area": "Sample Area"} for day in range(30, 0, -1)]
+        # Maple has 3 waiting, Oak 2 (the oldest), then 25 areas with one each.
+        people = ([{"date": "10/05/2026 02:00:00 PM", "area": "Maple"}] * 3 + [{"date": "10/01/2026 02:00:00 PM", "area": "Oak"}] * 2
+                  + [{"date": f"10/{day:02d}/2026 02:00:00 PM", "area": f"Single {day}"} for day in range(25, 0, -1)])
         with tempfile.TemporaryDirectory() as folder, patch.object(template.ImageDraw.ImageDraw, "text", record):
             engine.DashboardTemplate().buildImage("Fictional sample", None, 0, 30, 0, 0, 0, people, Path(folder) / "x.png")
-        names = [t for t in drawn if t.startswith("Waited ")]
-        self.assertEqual(names[0], "Waited 1")
-        self.assertEqual(len(names), 20)
+        listed = [t for t in drawn if t in {"Maple", "Oak"} or t.startswith("Single ")]
+        self.assertEqual(listed[:3], ["Maple", "Oak", "Single 1"])  # Most waiting, then longest waiting.
+        self.assertEqual(len(listed), 20)
+        self.assertIn("3 unattempted", drawn)
         self.assertIn("30 Unattempted Referrals", drawn)
-        self.assertIn("+ 10 more", drawn)
+        self.assertIn("+ 7 more areas", drawn)
+
+    def test_dashboards_from_real_runs_carry_no_names(self):
+        from referral_dash import template
+        seen = []
+        real = template.DashboardTemplate.buildImage
+
+        def spy(self, *args, **kwargs):
+            seen.extend(args[7] or [])
+            return real(self, *args, **kwargs)
+        with tempfile.TemporaryDirectory() as folder, patch.object(template.DashboardTemplate, "buildImage", spy):
+            engine.generate_reports(SAMPLE, folder, SETTINGS, period=SAMPLE_PERIOD)
+        self.assertTrue(seen)
+        self.assertTrue(all(set(entry) == {"date", "area"} for entry in seen))
 
 
 class ComparisonTests(Isolated):
@@ -429,22 +445,41 @@ class TableauTests(unittest.TestCase):
         self.assertNotIn("Did you mean", message)
         self.assertIn("Fix the mission name in Settings", message)
 
-    def test_authenticator_reopens_a_hidden_browser_and_asks_the_person(self):
+    def test_the_browser_opens_visible_and_asks_the_person_to_sign_in(self):
         from referral_dash.tableau import download
-        from referral_dash.tableau.session import VerificationNeeded
         opened, asked = [], []
 
-        def fake_download(driver, settings, credentials, work, destination, period, progress, verification, found=None):
-            verification()  # The Church sign-in shows an authenticator prompt.
+        def fake_download(driver, settings, work, destination, period, progress, waiting, found=None):
+            waiting()  # Tableau shows its sign-in page.
             return "export.csv"
         with tempfile.TemporaryDirectory() as folder, \
-                patch.object(download, "create_browser", side_effect=lambda work, visible: opened.append(visible) or unittest.mock.MagicMock()), \
+                patch.object(download, "create_browser", side_effect=lambda work: opened.append(work) or unittest.mock.MagicMock()), \
                 patch.object(download, "_download", side_effect=fake_download):
-            result = download.download_dashboard(SETTINGS, None, folder, SAMPLE_PERIOD, attention=asked.append)
+            result = download.download_dashboard(SETTINGS, folder, SAMPLE_PERIOD, attention=asked.append)
         self.assertEqual(result, "export.csv")
-        self.assertEqual(opened, [False, True])  # Hidden first, then visible for the person.
-        self.assertEqual(asked, [download.VERIFY_MESSAGE])
-        self.assertTrue(issubclass(VerificationNeeded, RuntimeError))
+        self.assertEqual(len(opened), 1)
+        self.assertEqual(asked, [download.SIGN_IN_MESSAGE])
+        options = download._options("edge", Path(folder))
+        self.assertFalse(any("headless" in argument for argument in options.arguments))
+
+    def test_sign_in_waits_for_the_person_and_types_nothing(self):
+        from referral_dash.tableau import session
+        now = [0.0]
+        pages = iter(["https://id.churchofjesuschrist.org/signin"] * 20 + ["https://x.online.tableau.com/t/site/views/Book/Dash"] * 5)
+        driver = unittest.mock.MagicMock()
+        type(driver).current_url = unittest.mock.PropertyMock(side_effect=lambda: next(pages))
+        driver.find_elements.side_effect = lambda by, value: ["frame"] if value == "iframe" else []
+        asked = []
+
+        def sleep(seconds):
+            now[0] += seconds
+        session.wait_for_sign_in(driver, "https://x.online.tableau.com/t/site/views/Book/Dash", lambda: asked.append(1),
+                                 clock=lambda: now[0], sleep=sleep)
+        self.assertEqual(asked, [1])  # Asked once, after a short grace.
+        driver.find_element.return_value.send_keys.assert_not_called()
+        with self.assertRaisesRegex(RuntimeError, "10 minutes"):
+            type(driver).current_url = unittest.mock.PropertyMock(return_value="https://id.churchofjesuschrist.org/signin")
+            session.wait_for_sign_in(driver, "https://x", clock=lambda: now[0], sleep=sleep)
 
     def test_download_date_check_rejects_unfiltered_exports(self):
         from referral_dash.tableau.download import validate_date_range
@@ -468,11 +503,11 @@ class TableauTests(unittest.TestCase):
             export = Path(folder) / "work" / "crosstab.csv"
             export.parent.mkdir()
             export.write_text("Event Date Selected\n8/1/2026\n9/8/2026\n", encoding="utf-16")
-            with patch.object(download, "login_tableau"), patch.object(download, "open_dashboard_view"), \
+            with patch.object(download, "wait_for_sign_in"), patch.object(download, "open_dashboard_view"), \
                     patch.object(download, "WebDriverWait"), patch.object(download.time, "sleep"), \
                     patch.object(download, "_wait_for_download", return_value=export), \
                     patch.object(download, "set_date_filter", side_effect=lambda d, element, value: typed.append(value)):
-                final = download._download(driver, SETTINGS, unittest.mock.MagicMock(), export.parent, Path(folder),
+                final = download._download(driver, SETTINGS, export.parent, Path(folder),
                                            make_period(SETTINGS, "2026-08-08", "2026-09-08"), lambda m: None, lambda: None)
             self.assertTrue(final.exists())
         self.assertEqual(typed, ["8/1/2026", "9/8/2026"])
@@ -922,19 +957,20 @@ class AppTests(Isolated):
         self.assertEqual(self.call("/api/state", token="wrong")[0], 403)
         self.assertEqual(self.call("/api/run", {"source": "sample"}, token="")[0], 403)
 
-    def test_real_runs_need_setup_first(self):
-        # The mission is found in Tableau, so a Tableau run only needs the Church account.
-        status, payload = self.call("/api/run", {"source": "tableau"})
-        self.assertEqual(status, 400)
-        self.assertIn("Church account", payload["error"])
+    def test_no_church_account_is_asked_for_or_kept(self):
+        state = self.call("/api/state")[1]
+        self.assertNotIn("account", state)
+        self.assertEqual(self.call("/api/account", {"email": "a@b.c", "username": "u", "password": "p"})[0], 404)
         # A CSV can't say which mission it is until a Tableau run has found it.
         with patch.object(self.app.Controller, "ask_ui", return_value=None):
             status, payload = self.call("/api/run", {"source": "file"})
         self.assertEqual(status, 400)
         self.assertIn("find your mission", payload["error"])
-        self.call("/api/settings", {"mission": "Sample Mission"})
-        status, payload = self.call("/api/run", {"source": "tableau"})
-        self.assertIn("Church account", payload["error"])
+
+    def test_an_old_saved_church_account_is_removed(self):
+        from referral_dash import credentials
+        credentials.forget_login()
+        self.keyring.delete_password.assert_called_with(credentials.SERVICE_NAME, credentials.LOGIN_RECORD)
 
     def finish(self, body):
         status, _ = self.call("/api/run", body)
@@ -1064,17 +1100,15 @@ class AppTests(Isolated):
         started.assert_not_called()
 
     def test_saved_dates_reach_the_download_and_the_report(self):
-        from referral_dash.credentials import LoginCredentials
         from referral_dash.settings import load_settings, save_settings
         # A year of "past days" keeps the October sample inside the default range whatever today's date is.
         save_settings({**load_settings(), "mission": "Sample Mission", "output_folder": self.output.name, "lookback_days": 365})
         seen = []
 
-        def download(settings, login, folder, period, progress, attention, found=None):
+        def download(settings, folder, period, progress, attention, found=None):
             seen.append(period)
             return SAMPLE
-        with patch("referral_dash.tableau.download.download_dashboard", side_effect=download), \
-                patch.object(self.app.credentials, "load_login", return_value=LoginCredentials("a@b.c", "user", "pw")):
+        with patch("referral_dash.tableau.download.download_dashboard", side_effect=download):
             today = self.finish({"source": "tableau"})
             self.assertEqual(self.call("/api/settings", {"report_mode": "range", "report_start": "2026-10-01", "report_end": "2026-10-08"})[0], 200)
             fixed = self.finish({"source": "tableau"})

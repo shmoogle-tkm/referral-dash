@@ -1,63 +1,38 @@
-"""Account-independent login and view selection for the Tableau collectors."""
+"""Waiting for the person to sign in to Tableau themselves, and opening the Dashboard view.
+
+Referral Dash never types or stores a Church username or password: the browser opens at the
+workbook, the person signs in as they would by hand, and the run carries on from there.
+"""
 from __future__ import annotations
 
-import re
+import time
 from urllib.parse import urlsplit
 
-from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
+from selenium.common.exceptions import StaleElementReferenceException, WebDriverException
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
 
 from .wait import dismiss_post_login_dialog, switch_to_frame_containing
 
-
-class TableauSignInTimeout(RuntimeError):
-    """A transient sign-in transition, safe to retry in a fresh browser."""
-
-
-class VerificationNeeded(RuntimeError):
-    """The Church sign-in wants an authenticator step that only a person can complete."""
+SIGN_IN_MINUTES = 10
+# A saved browser session can open the workbook without a sign-in; give it a moment before asking.
+ASK_AFTER_SECONDS = 4
+# Signed in but left on Tableau's home page: go to the workbook, at most this often.
+REDIRECT_EVERY_SECONDS = 15
 
 
-# After the password, a page that stays on the Church sign-in this long is an authenticator step.
-VERIFICATION_GRACE_SECONDS = 15
-VERIFICATION_TIMEOUT_SECONDS = 300
-
-
-def _sign_in_timeout(driver, phase):
-    parsed = urlsplit(str(driver.current_url or ""))
-    # Never include query strings, page text, cookies, or credentials in logs.
-    location = f"{parsed.hostname or 'Tableau'}{parsed.path}"
-    return TableauSignInTimeout(
-        f"Tableau sign-in timed out {phase} at {location}. "
-        "Nothing was downloaded or uploaded. Check the account's Tableau access if retrying also fails."
-    )
-
-
-def tableau_site_uri(endpoint: str | None) -> str:
-    match = re.search(r"/t/([^/]+)", endpoint or "")
-    return match.group(1) if match else ""
-
-
-def _login_state(driver):
+def _signed_in_view(driver):
+    """True once the workbook view itself is open (it draws inside an iframe)."""
     try:
-        return _read_login_state(driver)
+        return "/views/" in str(driver.current_url or "") and bool(driver.find_elements(By.TAG_NAME, "iframe"))             and not _sign_in_field_showing(driver)
     except StaleElementReferenceException:
-        # The sign-in page redrew while it was being read; look again on the next poll.
         return False
 
 
-def _read_login_state(driver):
+def _sign_in_field_showing(driver):
     for field_id in ("email", "site-uri", "siteURI", "username-input", "password-input"):
         for field in driver.find_elements(By.ID, field_id):
-            if field.is_displayed() and field.is_enabled():
-                return field_id, field
-    if "/siteURI" in driver.current_url:
-        for field in driver.find_elements(By.CSS_SELECTOR, 'input[type="email"], input[type="text"]'):
-            if field.is_displayed() and field.is_enabled():
-                return "siteURI", field
-    if "/views/" in driver.current_url and driver.find_elements(By.TAG_NAME, "iframe"):
-        return "ready", None
+            if field.is_displayed():
+                return True
     return False
 
 
@@ -70,142 +45,48 @@ def _tableau_landing_url(value: str) -> bool:
 
 
 def _access_failure_message(driver) -> str | None:
-    """Turn IdP access failures into an actionable setup message."""
+    """The one sign-in result a person can't fix by trying again: no access to Tableau."""
     try:
-        url = str(driver.current_url or "").lower()
         body = " ".join(driver.find_element(By.TAG_NAME, "body").text.split()).lower()
     except Exception:
         return None
     if "not assigned to this application" in body or "user is not assigned" in body:
-        return (
-            "This Church account is not assigned to the Tableau Online application. "
-            "Ask the administrator to assign the account to Tableau Online, then run Referral Dash again."
-        )
-    if "access denied" in body or "unauthorized" in body or "not authorized" in body:
-        return "This Church account is not authorized for the Tableau dashboard. Ask the administrator to grant Tableau access, then retry."
-    if "id.churchofjesuschrist.org" in url and body:
-        # Keep the generic login failure for ordinary invalid credentials, but
-        # include the identity-provider page when it exposes a useful reason.
-        if any(term in body for term in ("invalid", "incorrect", "failed", "locked")):
-            return "The Church account was rejected by sign-in. Check the saved username and password, then retry."
+        return ("This Church account is not assigned to Tableau Online. "
+                "Ask the mission office to give it Tableau access, then run Referral Dash again.")
     return None
 
 
-def _after_password(driver, next_state, on_verification):
-    try:
-        return WebDriverWait(driver, VERIFICATION_GRACE_SECONDS).until(next_state)
-    except TimeoutException:
-        still_signing_in = not _tableau_landing_url(driver.current_url) and not _access_failure_message(driver)
-        if on_verification is None or not still_signing_in:
-            raise
-    on_verification()
-    try:
-        return WebDriverWait(driver, VERIFICATION_TIMEOUT_SECONDS).until(next_state)
-    except TimeoutException as error:
-        raise RuntimeError(
-            f"The authenticator step was not finished within {VERIFICATION_TIMEOUT_SECONDS // 60} minutes. "
-            "Run again and approve the sign-in in the browser window that opens."
-        ) from error
+def wait_for_sign_in(driver, endpoint: str, on_waiting=lambda: None, timeout: int = SIGN_IN_MINUTES * 60,
+                     clock=time.monotonic, sleep=time.sleep) -> None:
+    """Return once the workbook is open, after the person signs in in the browser window.
 
-
-def login_tableau(
-    driver, endpoint: str, *, email: str | None, username: str | None,
-    password: str | None, timeout: int = 60, on_verification=None,
-) -> None:
-    """Accept email, site, username, password, and already signed-in entry points.
-
-    Credentials are read by callers for each run; no account identity or session
-    is cached by this module. Only visible login fields receive credentials.
-    When the Church sign-in asks for an authenticator after the password,
-    `on_verification()` is called (it may raise VerificationNeeded to restart with
-    a visible browser) and the person gets several minutes to finish.
+    Nothing is typed for them. `on_waiting()` is called once if they need to sign in.
     """
     driver.implicitly_wait(0)
     driver.switch_to.default_content()
-    # The view URL is the entry point for a fresh account. Tableau must receive
-    # the email first so it can route the account to the Church sign-in page.
-    # Going straight to TABLEAU_SSO_ENDPOINT skips that routing step and can
-    # incorrectly show the identity provider's application-assignment page.
-    wait = WebDriverWait(driver, timeout)
-    def entry_state(browser):
-        current = _login_state(browser)
-        if current:
-            return current
-        if "/views/" not in browser.current_url and _tableau_landing_url(browser.current_url):
-            browser.get(endpoint)
-            return _login_state(browser)
-        return False
-    try:
-        state = wait.until(entry_state)
-    except TimeoutException as error:
-        access_message = _access_failure_message(driver)
-        if access_message:
-            raise RuntimeError(access_message) from error
-        raise _sign_in_timeout(driver, "waiting for the sign-in page") from error
-    submitted_email = False
-    for _ in range(8):
-        field_id, field = state
-        if field_id == "ready":
-            return
-        if field_id in {"site-uri", "siteURI"} or (field_id == "email" and "/siteURI" in driver.current_url):
-            value = tableau_site_uri(endpoint)
-            if not value:
-                raise RuntimeError("Tableau site name is missing from the configured view URL.")
-        elif field_id == "email":
-            value = email
-            if submitted_email:
-                raise RuntimeError("Tableau returned to the email page; check this account's Tableau access.")
-            submitted_email = True
-        elif field_id == "username-input":
-            value = username
-        else:
-            value = password
-        if not value:
-            raise RuntimeError(f"Tableau login requires the saved account's {field_id} value.")
-        field.clear()
-        field.send_keys(value)
-        field.submit()
-
-        def next_state(browser):
-            # After the Church password, Tableau may land on its home page instead of the
-            # requested view; any signed-in Tableau page means the hand-off finished.
-            if field_id == "password-input":
-                if _tableau_landing_url(browser.current_url) and not browser.find_elements(By.ID, "password-input"):
-                    return "sso-complete", None
-            current = _login_state(browser)
-            if current and (current[0] != field_id or current[1] != field):
-                return current
-            if field_id in {"site-uri", "siteURI"}:
-                if "Unable to verify site URI" in browser.find_element(By.TAG_NAME, "body").text:
-                    return "site-error", None
-            return False
-
+    started = clock()
+    asked = False
+    last_redirect = started
+    while clock() - started < timeout:
         try:
-            if field_id == "password-input":
-                state = _after_password(driver, next_state, on_verification)
-            else:
-                state = wait.until(next_state)
-        except TimeoutException as error:
-            access_message = _access_failure_message(driver)
-            if access_message:
-                raise RuntimeError(access_message) from error
-            raise _sign_in_timeout(driver, f"after {field_id}") from error
-        if state[0] == "sso-complete":
-            driver.get(endpoint)
-            try:
-                state = wait.until(entry_state)
-            except TimeoutException as error:
-                access_message = _access_failure_message(driver)
-                if access_message:
-                    raise RuntimeError(access_message) from error
-                raise _sign_in_timeout(driver, "returning from Church sign-in") from error
-        elif state[0] == "site-error":
-            raise RuntimeError(
-                "Tableau could not route the saved email to the configured Church site. "
-                "In Settings, use the exact email that you enter on Tableau's email page, then retry. "
-                "The Church username is only used on the Church sign-in page."
-            )
-    raise RuntimeError("Tableau login did not reach the requested view.")
+            if _signed_in_view(driver):
+                return
+            url = str(driver.current_url or "")
+            if ("/views/" not in url and _tableau_landing_url(url) and not _sign_in_field_showing(driver)
+                    and clock() - last_redirect >= REDIRECT_EVERY_SECONDS):
+                last_redirect = clock()
+                driver.get(endpoint)
+                continue
+            message = _access_failure_message(driver)
+        except WebDriverException as error:
+            raise RuntimeError("The browser window was closed before sign-in finished. Click Run to try again.") from error
+        if message:
+            raise RuntimeError(message)
+        if not asked and clock() - started >= ASK_AFTER_SECONDS:
+            asked = True
+            on_waiting()
+        sleep(1)
+    raise RuntimeError(f"Sign-in wasn't finished within {SIGN_IN_MINUTES} minutes. Click Run to try again.")
 
 
 def open_dashboard_view(driver, mission: str, zone, *, timeout: int = 60) -> None:

@@ -7,8 +7,8 @@ district summary design.
 
 One click:
 
-1. **Signs in to Tableau** with the mission's Church account (stored in Windows
-   Credential Manager), opens the account's `Dashboard` view, or recreates it
+1. **Opens Tableau** in a visible browser for the person to sign in themselves
+   (no account is typed or stored), then opens the account's `Dashboard` view, or recreates it
    with the mission's filters if it is missing, sets the date range, and
    downloads the detail crosstab.
 2. **Renders** area, district, zone and mission dashboards.
@@ -69,7 +69,7 @@ first-time setup; rarely needed options sit under Settings > Advanced.
 | `referral_dash/period.py` | The report's date range and the range it compares with |
 | `referral_dash/cleanup.py` | Keeps the newest report sets; prunes browser caches |
 | `referral_dash/drive.py` | Google sign-in, folder pick, upload, moving old sets to the trash |
-| `referral_dash/credentials.py` | Church account in Windows Credential Manager |
+| `referral_dash/credentials.py` | Google Drive connection in Windows Credential Manager |
 
 ## Develop
 

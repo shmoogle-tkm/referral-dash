@@ -1,4 +1,4 @@
-"""Sign in to Tableau and download the mission's Dashboard crosstab.
+"""Open Tableau for the person to sign in, then download the mission's Dashboard crosstab.
 
 Adapted from the Referral Care Data Hub's referraldashhelper and browser client.
 """
@@ -22,26 +22,22 @@ from ..group import TZ_LOOKUP
 from ..settings import data_directory
 from ..settings import is_configured
 from .dashboard import choose_mission, dashboard_entry_url, read_filter_choices
-from .session import TableauSignInTimeout, VerificationNeeded, login_tableau, open_dashboard_view
+from .session import open_dashboard_view, wait_for_sign_in
 from .wait import dismiss_post_login_dialog, switch_to_frame_containing
 from .wait import set_date_filter
 
 
-VERIFY_MESSAGE = ("Finish signing in with your authenticator in the browser window that opened. "
-                  "Referral Dash continues by itself once Tableau opens.")
+SIGN_IN_MESSAGE = ("Sign in to Tableau in the browser window that opened. "
+                   "Referral Dash carries on by itself once you're in.")
 
 
-def _options(kind, download_dir, show_browser):
+def _options(kind, download_dir):
     options = webdriver.ChromeOptions() if kind == "chrome" else webdriver.EdgeOptions()
     # A saved profile keeps the Church/Tableau sign-in between runs, so an approved
     # ("remember this device") authenticator is not asked for every time.
     options.add_argument(f"--user-data-dir={data_directory() / 'browser' / kind}")
     # Background component downloads only fill the profile; Tableau needs none of them.
     options.add_argument("--disable-component-update")
-    if not show_browser:
-        options.add_argument("--headless=new")
-        options.add_argument("--window-size=1920,1080")
-        options.add_argument("--disable-gpu")
     options.add_experimental_option("prefs", {
         "download.default_directory": str(download_dir),
         "download.prompt_for_download": False,
@@ -51,12 +47,12 @@ def _options(kind, download_dir, show_browser):
     return options
 
 
-def create_browser(download_dir, show_browser=False):
+def create_browser(download_dir):
     """Chrome when installed, otherwise Edge. Selenium downloads the matching driver."""
     errors = []
     for kind, factory in (("chrome", webdriver.Chrome), ("edge", webdriver.Edge)):
         try:
-            return factory(options=_options(kind, download_dir, show_browser))
+            return factory(options=_options(kind, download_dir))
         except WebDriverException as error:
             errors.append(f"{kind}: {error.msg or error}".splitlines()[0])
     raise RuntimeError("Could not open Chrome or Microsoft Edge for the Tableau download. " + "; ".join(errors))
@@ -85,44 +81,37 @@ def _wait_for_download(folder, before, timeout=120):
     raise TimeoutError("Tableau did not finish downloading the CSV.")
 
 
-def download_dashboard(settings, credentials, destination, period, progress=lambda message: None,
+def download_dashboard(settings, destination, period, progress=lambda message: None,
                        attention=lambda message: None, found_mission=lambda name: None):
     """Download the Dashboard crosstab covering `period` and its comparison range; return the file path.
 
-    `attention(message)` is called when the person must act in the browser window.
+    The browser is always visible: the person signs in to Tableau there themselves.
+    `attention(message)` is called when they need to sign in.
     `found_mission(name)` gets the mission read from Tableau when settings have none yet.
     """
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
-    visible = settings["show_browser"]
     attempt = 0
     while True:
         work = destination / f".download-{uuid.uuid4().hex[:8]}"
         work.mkdir()
         driver = None
         try:
-            progress("Opening a browser for Tableau...")
-            driver = create_browser(work.resolve(), visible)
+            progress("Opening Tableau...")
+            driver = create_browser(work.resolve())
 
-            def verification():
-                if not visible:
-                    raise VerificationNeeded()
-                # Bring the window in front of Referral Dash so the person sees the prompt.
+            def waiting():
+                # Bring the window in front of Referral Dash so the person sees the sign-in page.
                 try:
                     driver.minimize_window()
                     driver.maximize_window()
                 except WebDriverException:
                     pass
-                attention(VERIFY_MESSAGE)
-            return _download(driver, settings, credentials, work, destination, period, progress, verification,
-                             found_mission)
-        except VerificationNeeded:
-            # The authenticator needs a person, which a hidden browser cannot offer.
-            visible = True
-            progress("Your account uses an authenticator; opening a browser window for you...")
+                attention(SIGN_IN_MESSAGE)
+            return _download(driver, settings, work, destination, period, progress, waiting, found_mission)
         except Exception as error:
             _save_evidence(driver)
-            if attempt or not isinstance(error, (TableauSignInTimeout, TimeoutException)):
+            if attempt or not isinstance(error, TimeoutException):
                 raise
             attempt += 1
             progress("Tableau was slow to respond; trying once more...")
@@ -134,15 +123,14 @@ def download_dashboard(settings, credentials, destination, period, progress=lamb
                 prune_browser_profile(data_directory() / "browser" / kind)
 
 
-def _download(driver, settings, credentials, work, destination, period, progress, verification,
+def _download(driver, settings, work, destination, period, progress, waiting=lambda: None,
               found_mission=lambda name: None):
     zone = TZ_LOOKUP[settings["timezones"]["default"]]
     entry = dashboard_entry_url(settings["tableau_view_url"])
     wait = WebDriverWait(driver, 60)
     driver.get(entry)
-    progress("Signing in to Tableau...")
-    login_tableau(driver, entry, email=credentials.email, username=credentials.username,
-                  password=credentials.password, on_verification=verification)
+    progress("Waiting for Tableau sign-in...")
+    wait_for_sign_in(driver, entry, waiting)
     mission = settings["mission"]
     if not is_configured(settings):
         # Each account sees only its own mission in Tableau, so there is nothing to type in setup.
