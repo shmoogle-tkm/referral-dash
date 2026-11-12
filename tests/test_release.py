@@ -141,6 +141,55 @@ class ReportTests(Isolated):
                     self.assertLessEqual(abs(box[0] + (bounds[0] + bounds[2]) / 2 - center[0]), 1)
                     self.assertLessEqual(abs(box[1] + (bounds[1] + bounds[3]) / 2 - center[1]), 1)
 
+    def test_district_summaries_compare_the_last_week_with_the_week_before(self):
+        from referral_dash.period import summary_period
+        settings = validate_settings({**SETTINGS, "summary_days": 3, "compare_days": 3})
+        period = make_period(settings, "2026-10-01", "2026-10-08")
+        weekly = summary_period(period, settings)
+        self.assertEqual((weekly.start, weekly.end), (date(2026, 10, 6), date(2026, 10, 8)))
+        self.assertEqual((weekly.baseline_start, weekly.baseline_end), (date(2026, 10, 3), date(2026, 10, 5)))
+        with tempfile.TemporaryDirectory() as folder:
+            _, facts = engine.generate_reports(SAMPLE, folder, settings, period=period)
+        self.assertEqual(facts["period"], "Oct 1, 2026 – Oct 8, 2026")          # Dashboards: the whole report.
+        self.assertEqual(facts["summary_period"], "Oct 6, 2026 – Oct 8, 2026")  # Summaries: the recent days.
+        self.assertEqual(facts["comparison_period"], "Oct 3, 2026 – Oct 5, 2026")
+        # A chosen comparison range is used as it is.
+        fixed = summary_period(make_period(settings, "2026-10-01", "2026-10-08", "2026-09-20", "2026-09-26"), settings)
+        self.assertEqual((fixed.baseline_start, fixed.baseline_end), (date(2026, 9, 20), date(2026, 9, 26)))
+
+    def test_the_speed_dial_puts_the_goal_at_the_top(self):
+        from referral_dash import gauges
+        self.assertEqual([t for _, t in gauges.speed_scale(5)], ["0", "1", "2", "3", "4", "5", "10", "20", "40", "80", "160+"])
+        self.assertEqual([t for _, t in gauges.speed_scale(10)], ["0", "2", "4", "6", "8", "10", "20", "40", "80", "160", "320+"])
+        self.assertEqual(gauges.speed_fraction(0, 5), 0)
+        self.assertEqual(gauges.speed_fraction(5, 5), 0.5)       # The goal is straight up.
+        self.assertAlmostEqual(gauges.speed_fraction(2.5, 5), 0.25)
+        self.assertAlmostEqual(gauges.speed_fraction(10, 5), 0.6)  # Each doubling is one mark.
+        self.assertEqual(gauges.speed_fraction(100000, 5), 1.0)  # Very slow pins at the end.
+        self.assertIsNone(gauges.speed_fraction(None, 5))
+
+    def test_the_found_dial_reads_in_tens(self):
+        from referral_dash import gauges
+        self.assertEqual([t for _, t in gauges.found_scale()], [str(i) for i in range(11)])
+        self.assertAlmostEqual(gauges.found_fraction(45), 0.45)
+        self.assertEqual((gauges.found_fraction(-3), gauges.found_fraction(140)), (0, 1))
+
+    def test_the_needles_follow_the_numbers(self):
+        # The needle is drawn in the dial ring, so two different values light up different pixels there.
+        with tempfile.TemporaryDirectory() as folder:
+            def ring(minutes, found):
+                target = Path(folder) / f"{minutes}-{found}.png"
+                engine.DashboardTemplate(5, 20).buildImage("Fictional sample", minutes, found, 8, 75, 50, 50, [], target)
+                return Image.open(target).convert("RGB")
+            from referral_dash import gauges
+            slow, fast = ring(160, 90), ring(1, 5)
+            # Halfway along where the slow needle should be: needle pink there in one picture, dark in the other.
+            spot = tuple(round(v) for v in gauges._point((444, 436), 142, gauges.speed_fraction(160, 5)))
+            red, green, blue = slow.getpixel(spot)
+            self.assertGreater(red, 180)
+            self.assertLess(green, 120)
+            self.assertLess(sum(fast.getpixel(spot)), 200)
+
     def test_a_long_unattempted_list_stops_growing_after_twenty_names(self):
         heights = {}
         with tempfile.TemporaryDirectory() as folder:
@@ -178,7 +227,7 @@ class ComparisonTests(Isolated):
         with tempfile.TemporaryDirectory() as folder:
             output, facts = engine.generate_reports(SAMPLE, folder, SETTINGS, period=SAMPLE_PERIOD)
             self.assertEqual(facts["period"], "Oct 1, 2026 – Oct 8, 2026")
-            self.assertEqual(facts["comparison_period"], "Sep 24, 2026 – Oct 1, 2026")
+            self.assertEqual(facts["comparison_period"], "Sep 25, 2026 – Oct 1, 2026")
             summary = Image.open(next((output / "5. District Summaries").glob("*.jpg"))).convert("RGB")
             arrows = sum(1 for r, g, b in summary.get_flattened_data() if (g > 200 and r < 120 and b < 180) or (r > 220 and g < 120 and b < 120))
             self.assertGreater(arrows, 100)
@@ -236,7 +285,8 @@ class ComparisonTests(Isolated):
                 patch.object(engine, "render_summary") as summary:
             engine.generate_reports(SAMPLE, folder, SETTINGS, period=SAMPLE_PERIOD)
         self.assertEqual(build.call_args.args[-1], date(2026, 10, 8))
-        self.assertEqual(summary.call_args.args[4:6], ("Oct 1, 2026 – Oct 8, 2026", "Sep 24, 2026 – Oct 1, 2026"))
+        # Summaries cover the last 7 days of the report, against the 7 days before.
+        self.assertEqual(summary.call_args.args[4:6], ("Oct 2, 2026 – Oct 8, 2026", "Sep 25, 2026 – Oct 1, 2026"))
 
     def test_csv_without_the_earlier_week_has_no_comparison(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -918,7 +968,7 @@ class AppTests(Isolated):
 
     def test_sample_run_shows_the_week_before_comparison(self):
         result = self.finish({"source": "sample"})["run"]["result"]
-        self.assertEqual(result["compared_with"], "Sep 24, 2026 – Oct 1, 2026")
+        self.assertEqual(result["compared_with"], "Sep 25, 2026 – Oct 1, 2026")
         self.assertEqual(result["referrals"], 8)
 
     def connected(self):
@@ -1008,7 +1058,8 @@ class AppTests(Isolated):
     def test_saved_dates_reach_the_download_and_the_report(self):
         from referral_dash.credentials import LoginCredentials
         from referral_dash.settings import load_settings, save_settings
-        save_settings({**load_settings(), "mission": "Sample Mission", "output_folder": self.output.name})
+        # A year of "past days" keeps the October sample inside the default range whatever today's date is.
+        save_settings({**load_settings(), "mission": "Sample Mission", "output_folder": self.output.name, "lookback_days": 365})
         seen = []
 
         def download(settings, login, folder, period, progress, attention, found=None):
@@ -1025,7 +1076,7 @@ class AppTests(Isolated):
             shifted = self.finish({"source": "tableau"})
         self.assertEqual(seen[0].baseline_start, seen[0].start - timedelta(days=7))
         self.assertEqual((seen[1].start, seen[1].end), (date(2026, 10, 1), date(2026, 10, 8)))
-        self.assertEqual(fixed["run"]["result"]["compared_with"], "Sep 24, 2026 – Oct 1, 2026")
+        self.assertEqual(fixed["run"]["result"]["compared_with"], "Sep 25, 2026 – Oct 1, 2026")
         self.assertEqual(fixed["plan"]["period"], "Oct 1, 2026 – Oct 8, 2026")
         self.assertEqual(chosen["run"]["result"]["compared_with"], "Sep 24, 2026 – Sep 27, 2026")
         self.assertEqual(seen[2].download_start, date(2026, 9, 24))
@@ -1063,7 +1114,7 @@ class AppTests(Isolated):
             self.call("/api/settings", {"report_mode": "range", "report_start": "2026-10-01", "report_end": "2026-10-08"})
             fixed = self.finish({"source": "file"})["run"]["result"]
         self.assertEqual((whole["referrals"], whole["compared_with"]), (16, None))
-        self.assertEqual((fixed["referrals"], fixed["compared_with"]), (8, "Sep 24, 2026 – Oct 1, 2026"))
+        self.assertEqual((fixed["referrals"], fixed["compared_with"]), (8, "Sep 25, 2026 – Oct 1, 2026"))
 
     def test_lost_window_is_reopened_then_falls_back_to_the_default_browser(self):
         app = self.app

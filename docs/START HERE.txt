@@ -21,8 +21,9 @@ EVERY WEEK
 Open Referral Dash and click Run now. Wait for "Reports are ready", then
 click "Open reports".
 
-District Summaries show each area's growth or decline compared with the week
-before, starting with your very first run.
+District Summaries show each area's last 7 days compared with the 7 days
+before (this week against last week), starting with your very first run. The
+dashboards still cover the full report range.
 
 CHOOSING DATES
 Reports cover the last 30 days ending today, compared with the same dates 7 days
@@ -30,6 +31,7 @@ before. The main screen shows the dates in the line above Run now. To change
 them, open Settings > Advanced:
 - Reports cover: the past so many days, or a date range.
 - Compare to: so many days before, or a date range.
+- District summaries cover: the last so many days of the report (7 by default).
 For August 8 to September 8 compared 7 days before, the arrows compare with
 August 1 to September 1. A past range shows numbers as they stood on its end
 date. A date range stays set until you change it back.
@@ -64,6 +66,10 @@ IF SOMETHING GOES WRONG
 - Already downloaded a CSV yourself? Click "Use a CSV I downloaded". To get
   the change arrows, choose a date range in Settings > Advanced, and make sure
   your CSV also covers the dates you compare with.
+- Reading the dials: each needle points at the real number. On the left, the
+  speed goal sits at the top; faster times are to its left, and each mark to
+  its right doubles. On the right, each mark is 10% found. The light blue line
+  shows where the goal is met, and the lightning or fire appears then.
 - Settings > Advanced has the rarely needed options: report dates and
   comparison, the speed goal (lightning) and find goal (fire), morning and
   night hours, and zones in another time zone.

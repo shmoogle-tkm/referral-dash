@@ -26,7 +26,7 @@ from . import credentials, drive, missions
 from .cleanup import prune_app_data, prune_reports, report_runs
 from .engine import generate_reports
 from .district_summary import period_label
-from .period import default_range, make_period, settings_period
+from .period import default_range, make_period, settings_period, summary_period
 from .settings import (TIMEZONES, VERSION, app_directory, data_directory, is_configured, load_settings,
                        save_settings, suggested_timezone, validate_settings)
 
@@ -100,8 +100,10 @@ class Controller:
             period = settings_period(settings)
         except ValueError as error:
             return {"error": str(error)}
+        weekly = summary_period(period, settings)
         return {"period": period_label(period.start.isoformat(), period.end.isoformat()),
-                "compared": period_label(period.baseline_start.isoformat(), period.baseline_end.isoformat())}
+                "summary": period_label(weekly.start.isoformat(), weekly.end.isoformat()),
+                "compared": period_label(weekly.baseline_start.isoformat(), weekly.baseline_end.isoformat())}
 
     def recent(self, output):
         runs = []
@@ -133,7 +135,7 @@ class Controller:
     # ----- settings -----
     def save_settings(self, body):
         current = load_settings()
-        allowed = {"mission", "lightning", "pepper", "start_time", "cutoff_time", "timezones", "timezone_auto",
+        allowed = {"mission", "lightning", "pepper", "start_time", "cutoff_time", "timezones", "timezone_auto", "summary_days",
                    "tableau_view_url", "lookback_days", "show_browser", "keep_reports", "report_mode",
                    "report_start", "report_end", "compare_mode", "compare_days", "compare_start", "compare_end"}
         merged = validate_settings({**current, **{k: v for k, v in body.items() if k in allowed}})

@@ -8,7 +8,7 @@ from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import available_timezones
 
-VERSION = "2.4.0"
+VERSION = "2.5.0"
 APP_NAME = "Referral Dash"
 # Older settings used these short names; they are stored as the zones they always meant.
 LEGACY_ZONES = {"UTC": "UTC", "EST": "America/New_York", "CST": "America/Chicago", "MST": "America/Denver",
@@ -37,6 +37,8 @@ DEFAULTS = {"mission": "Your Mission", "lightning": 5, "pepper": 20,
             "report_mode": "days", "report_start": "", "report_end": "",
             # What the change arrows compare with: the same range `compare_days` earlier, or fixed dates.
             "compare_mode": "days", "compare_days": 7, "compare_start": "", "compare_end": "",
+            # District summaries cover the last `summary_days` of the report, against the same days earlier.
+            "summary_days": 7,
             # The Google Drive folder picked when connecting; blank means no uploads.
             "drive_upload_folder_id": "", "drive_upload_folder_name": "",
             # Follow this computer's time zone until someone picks one in Settings.
@@ -130,6 +132,9 @@ def validate_settings(data):
                     raise ValueError(f"Choose valid {label} dates.") from error
         if result[mode] == "range" and not (result[first] and result[last]):
             raise ValueError(f"Choose both a start and an end date for the {label}.")
+    result["summary_days"] = int(result["summary_days"])
+    if not 1 <= result["summary_days"] <= 365:
+        raise ValueError("District summaries can cover 1 to 365 days.")
     result["compare_days"] = int(result["compare_days"])
     if not 1 <= result["compare_days"] <= 365:
         raise ValueError("Compare with 1 to 365 days before.")

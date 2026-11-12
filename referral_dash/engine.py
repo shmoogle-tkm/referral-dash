@@ -5,10 +5,12 @@ import io
 import json
 import re
 import shutil
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from .group import Mission, ReferralPerson, DATE_FORMAT
+from .period import summary_period
 from .template import PICTURE_SUFFIX, DashboardTemplate
 from .settings import METRIC_KEYS, VERSION, validate_settings
 from .cleanup import RUN_PREFIX
@@ -179,11 +181,26 @@ def generate_reports(filename, output_parent, settings, progress=lambda message,
     settings = validate_settings(settings)
     progress("Checking the export...")
     mission, baseline, facts = read_export(filename, settings, period, baseline_covered)
-    previous = {"areas": area_records(baseline)} if baseline else None
-    records = area_records(mission)
     label = (period_label(period.start.isoformat(), period.end.isoformat()) if period
              else period_label(facts["first_referral_date"], facts["last_referral_date"]))
-    compared = period_label(period.baseline_start.isoformat(), period.baseline_end.isoformat()) if previous else None
+    # District summaries look at a shorter, recent window (this week vs last week by default),
+    # read from the same download as the dashboards.
+    summary_label = label
+    if period:
+        weekly = summary_period(period, settings)
+        try:
+            summary_mission, baseline, _ = read_export(filename, settings, weekly, baseline_covered)
+            summary_label = period_label(weekly.start.isoformat(), weekly.end.isoformat())
+            period_for_summary = weekly
+        except ValueError:
+            # No referrals at all in the recent window: summaries fall back to the whole report.
+            summary_mission, period_for_summary = mission, period
+    else:
+        summary_mission, period_for_summary = mission, None
+    previous = {"areas": area_records(baseline)} if baseline else None
+    records = area_records(summary_mission)
+    compared = (period_label(period_for_summary.baseline_start.isoformat(), period_for_summary.baseline_end.isoformat())
+                if previous and period_for_summary else None)
     parent = Path(output_parent).resolve()
     if not parent.is_dir():
         raise ValueError("Choose an existing output folder that you can write to.")
@@ -228,7 +245,7 @@ def generate_reports(filename, output_parent, settings, progress=lambda message,
         summary_folder.mkdir()
         for index,(zone,district) in enumerate(districts,1):
             progress(f"Creating district summary: {district}...", image_count, total)
-            render_summary(zone, district, records, previous, label, compared,
+            render_summary(zone, district, records, previous, summary_label, compared,
                            summary_folder / f"{index:02d} - {safe_name(zone + ' - ' + district)}{PICTURE_SUFFIX}")
             image_count += 1
         facts.update({"version": VERSION, "generated_utc": datetime.now(timezone.utc).isoformat(),
@@ -240,13 +257,21 @@ def generate_reports(filename, output_parent, settings, progress=lambda message,
                       "found_percent": mission.percent_found, "at_church_percent": mission.percent_attended_church,
                       "median_response_minutes": mission.median_response_time,
                       "areas":records,"district_summaries":len(districts),
-                      "period": label, "comparison_period": compared})
+                      "period": label, "summary_period": summary_label, "comparison_period": compared})
         (staging / "run-summary.json").write_text(json.dumps(facts, indent=2), encoding="utf-8")
         # A second run of the same dates sits beside the first.
         final, copy = parent / name, 2
         while final.exists():
             final, copy = parent / f"{name} ({copy})", copy + 1
-        staging.rename(final)
+        # Windows' virus scanner can hold brand-new pictures for a moment; wait instead of failing the run.
+        for attempt in range(40):
+            try:
+                staging.rename(final)
+                break
+            except PermissionError:
+                if attempt == 39:
+                    raise
+                time.sleep(0.25)
     except Exception:
         # Only our unique, incomplete run directory is removed; previous output is untouched.
         if staging.exists():

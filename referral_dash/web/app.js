@@ -128,11 +128,14 @@ function renderDateChoices() {
   const end = fixedReport ? form.report_end.value : today;
   const fixedCompare = form.compare_mode.value === "range";
   const days = Number(form.compare_days.value) || 0;
-  const first = fixedCompare ? form.compare_start.value : start && shifted(start, days);
+  // District summaries cover the report's last few days, against the matching days before.
+  const recent = Math.max(1, Number(form.summary_days.value) || 7);
+  const summaryStart = start && end && (shifted(end, recent - 1) > start ? shifted(end, recent - 1) : start);
+  const first = fixedCompare ? form.compare_start.value : summaryStart && shifted(summaryStart, days);
   const last = fixedCompare ? form.compare_end.value : end && shifted(end, days);
   $("#dates-preview").textContent = start && end && first && last
-    ? `${longDate(start)} – ${longDate(end)}, compared with ${longDate(first)} – ${longDate(last)}`
-    : "Choose both dates.";
+    ? `Dashboards ${longDate(start)} – ${longDate(end)}. District summaries ${longDate(summaryStart)} – ${longDate(end)}, compared with ${longDate(first)} – ${longDate(last)}.`
+    : "Choose both dates to use this range.";
 }
 
 function daysAgo(iso) {
@@ -181,7 +184,7 @@ function fillForms() {
   account.username.value = state.account.username;
   const advanced = $("#advanced-form");
   for (const key of ["lookback_days", "start_time", "cutoff_time", "lightning", "pepper", "tableau_view_url", "report_mode",
-                     "report_start", "report_end", "compare_mode", "compare_days", "compare_start", "compare_end"]) advanced[key].value = s[key];
+                     "report_start", "report_end", "compare_mode", "compare_days", "compare_start", "compare_end", "summary_days"]) advanced[key].value = s[key];
   renderDateChoices();
   advanced.overrides.value = Object.entries(overrides()).map(([zone, tz]) => `${zone} = ${tz}`).join("\n");
   advanced.show_browser.checked = s.show_browser;
@@ -238,7 +241,7 @@ function renderRunCard(ready, running) {
   plan.hidden = !ready;
   plan.className = "plan-line" + (state.plan.error ? " is-error" : "");
   plan.textContent = state.plan.error ? `Check the dates in Settings > Advanced: ${state.plan.error}`
-    : `${state.plan.period}, compared with ${state.plan.compared}`;
+    : `${state.plan.period} · District summaries ${state.plan.summary} vs ${state.plan.compared}`;
   $$(".run-alternatives [data-run]").forEach((b) => (b.disabled = running));
 
   $("#output-name").textContent = folderName(state.output_folder);
@@ -477,7 +480,7 @@ $("#advanced-form").addEventListener("submit", async (event) => {
     timezones[line.slice(0, at).trim()] = line.slice(at + 1).trim();
   }
   const body = { timezones, report_mode: form.report_mode.value, report_start: form.report_start.value, report_end: form.report_end.value,
-                 compare_mode: form.compare_mode.value, compare_days: form.compare_days.value,
+                 compare_mode: form.compare_mode.value, compare_days: form.compare_days.value, summary_days: form.summary_days.value,
                  compare_start: form.compare_start.value, compare_end: form.compare_end.value,
                  lookback_days: form.lookback_days.value, start_time: form.start_time.value, cutoff_time: form.cutoff_time.value,
                  lightning: form.lightning.value, pepper: form.pepper.value, tableau_view_url: form.tableau_view_url.value,

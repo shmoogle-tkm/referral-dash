@@ -1,6 +1,7 @@
 from datetime import datetime
 import math
 from PIL import Image, ImageDraw, ImageFont
+from . import gauges
 import os
 import sys
 import random
@@ -140,6 +141,15 @@ class DashboardTemplate():
             expanded = Image.new("RGBA", (img.width, needed_height), img.getpixel((0, img.height - 1)))
             expanded.paste(img, (0, 0))
             img = expanded
+        # The dials' scales and needles follow the goals, so each needle points at the real number.
+        scale_font = ImageFont.truetype(BIG_FONT_PATH, 24)
+        speed_goal = self.lightning_time
+        gauges.draw_dial(img, LEFT_CIRCLE_CENTER, gauges.speed_scale(speed_goal),
+                         [(0.0, 0.5, gauges.GOAL)],
+                         gauges.speed_fraction(GAUGE_DATA["time"]["value"], speed_goal), scale_font)
+        gauges.draw_dial(img, RIGHT_CIRCLE_CENTER, gauges.found_scale(),
+                         [(gauges.found_fraction(self.hot_found), 1.0, gauges.GOAL)],
+                         gauges.found_fraction(GAUGE_DATA["found"]["value"]), scale_font)
         draw = ImageDraw.Draw(img)
 
         big_font = ImageFont.truetype(BIG_FONT_PATH, BIG_FONT_SIZE)

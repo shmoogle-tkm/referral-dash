@@ -79,6 +79,21 @@ def make_period(settings, start=None, end=None, compare_start=None, compare_end=
                   baseline_start, baseline_end)
 
 
+def summary_period(period, settings):
+    """What district summaries cover: the report's last `summary_days`, against the matching days earlier.
+
+    With a fixed comparison range, that range is used as it is. The report's download already reaches
+    back far enough, because the summary's comparison never starts before the report's.
+    """
+    start = max(period.start, period.end - timedelta(days=settings["summary_days"] - 1))
+    # A chosen comparison range is any comparison that isn't simply the report moved back compare_days.
+    chosen = settings["compare_mode"] == "range" or period.end - period.baseline_end != timedelta(days=settings["compare_days"])
+    if chosen:
+        return Period(start, period.end, period.cutoff, period.zone, period.baseline_start, period.baseline_end)
+    shift = period.end - period.baseline_end
+    return Period(start, period.end, period.cutoff, period.zone, start - shift, period.baseline_end)
+
+
 def settings_period(settings, now=None):
     """The period the saved date settings describe."""
     report = (settings["report_start"], settings["report_end"]) if settings["report_mode"] == "range" else (None, None)
