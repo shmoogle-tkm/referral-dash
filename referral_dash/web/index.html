@@ -110,15 +110,13 @@
 
         <form class="card form-card" id="mission-form">
           <div class="form-head">
-            <div>
-              <h2>Mission</h2>
-              <p id="mission-help">Found in Tableau on your first run.</p>
-            </div>
+            <h2>Mission</h2>
+            <p id="mission-help">Found in Tableau on your first run.</p>
           </div>
           <div class="fields">
             <label class="wide">Mission name<input name="mission" maxlength="55" placeholder="Found automatically" list="mission-options" autocomplete="off"></label>
             <datalist id="mission-options"></datalist>
-            <label>Time zone<select name="timezone" id="timezone-select"></select></label>
+            <label class="wide">Time zone<select name="timezone" id="timezone-select"></select></label>
           </div>
           <div class="form-foot save-foot"><span class="saved-note" id="mission-note"></span><button class="button button-primary" type="submit">Save</button></div>
         </form>

@@ -185,14 +185,11 @@ svg { fill: currentColor; }
 .empty-state { padding: 6px 0 2px; }
 
 /* ----- setup and settings ----- */
-.welcome { display: flex; flex-direction: column; gap: 10px; padding: 26px 4px 8px; }
 .settings-head { display: flex; align-items: center; gap: 16px; padding-top: 6px; }
 .settings-head h1 { font-size: 28px; }
 .form-card { display: flex; flex-direction: column; gap: 20px; }
-.form-head { display: grid; grid-template-columns: 36px 1fr; gap: 14px; }
-.form-head p { margin-top: 4px; font-size: 14px; }
-.step { display: grid; place-items: center; width: 36px; height: 36px; border: 1px solid var(--cyan); border-radius: 50%; color: var(--cyan); font-family: "Cal Sans", Nunito, sans-serif; font-size: 17px; }
-.step.is-done { border-color: transparent; background: var(--green); color: #04140c; }
+.form-head { display: flex; flex-direction: column; gap: 4px; }
+.form-head p { font-size: 14px; }
 .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .fields .wide { grid-column: 1 / -1; }
 label { display: flex; flex-direction: column; gap: 7px; color: var(--muted); font-size: 13px; font-weight: 700; }
@@ -201,19 +198,14 @@ input, select, textarea { width: 100%; min-height: 44px; padding: 10px 13px; bor
 input::placeholder, textarea::placeholder { color: var(--subtle); }
 input:focus, select:focus, textarea:focus { border-color: var(--cyan); outline: none; box-shadow: 0 0 0 3px rgba(47, 160, 255, 0.18); }
 textarea { resize: vertical; }
-.password-field { position: relative; display: block; }
-.password-field input { padding-right: 64px; }
-.password-field .link-button { position: absolute; top: 50%; right: 14px; transform: translateY(-50%); font-size: 13px; }
 .check-row { flex-direction: row; align-items: center; gap: 10px; color: var(--text); font-size: 14px; font-weight: 400; }
 .check-row input { width: 18px; min-height: 18px; accent-color: var(--cyan); }
 .form-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .saved-note { color: var(--green); font-size: 13px; font-weight: 700; }
-/* Save buttons show up once something changed; during setup they are always there. */
-body:not(.is-setup) form:not(.is-dirty) .save-foot .button { display: none; }
-#advanced-form:not(.is-dirty) .save-foot { display: none; }
+/* The save row shows up once something changed; a toast confirms the save. */
+form:not(.is-dirty) .save-foot { display: none; }
 form.is-dirty .saved-note { visibility: hidden; }
 form.is-dirty .save-foot .button { animation: rise 220ms var(--ease); }
-.setup-alt { padding: 0 4px; text-align: center; }
 
 .advanced { padding: 0; }
 .advanced summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 22px 26px; list-style: none; cursor: pointer; }

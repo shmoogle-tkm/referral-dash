@@ -8,7 +8,7 @@ from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import available_timezones
 
-VERSION = "2.6.0"
+VERSION = "2.6.1"
 APP_NAME = "Referral Dash"
 # Older settings used these short names; they are stored as the zones they always meant.
 LEGACY_ZONES = {"UTC": "UTC", "EST": "America/New_York", "CST": "America/Chicago", "MST": "America/Denver",
