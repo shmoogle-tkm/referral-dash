@@ -257,7 +257,7 @@ def generate_reports(filename, output_parent, settings, progress=lambda message,
                       "successful_contact_percent": mission.percent_successful_contact,
                       "found_percent": mission.percent_found, "at_church_percent": mission.percent_attended_church,
                       "median_response_minutes": mission.median_response_time,
-                      "areas":records,"district_summaries":len(districts),
+                      "areas": area_records(mission), "summary_areas": records, "district_summaries": len(districts),
                       "period": label, "summary_period": summary_label, "comparison_period": compared})
         (staging / "run-summary.json").write_text(json.dumps(facts, indent=2), encoding="utf-8")
         # A second run of the same dates sits beside the first.
