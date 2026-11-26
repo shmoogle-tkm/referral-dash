@@ -11,6 +11,8 @@ version = re.search(r'VERSION = "([^"]+)"', open(f"{package}/settings.py", encod
 
 datas = [(f"{package}/{folder}", folder) for folder in ("web", "fonts", "images", "sample-data", "data")]
 datas += collect_data_files("selenium")
+# The trend video encodes with the ffmpeg binary that imageio-ffmpeg ships.
+datas += collect_data_files("imageio_ffmpeg")
 # Google treats a Desktop app's client file as not secret; without one, the Drive option stays hidden.
 if os.path.isfile("drive_oauth_client.json"):
     datas.append(("drive_oauth_client.json", "."))

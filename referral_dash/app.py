@@ -26,6 +26,7 @@ from urllib.request import Request, urlopen
 from . import credentials, drive, missions
 from .cleanup import prune_app_data, prune_reports, report_runs
 from .engine import generate_reports
+from .video import VIDEO_FOLDER, make_video, video_files, video_range
 from .district_summary import period_label
 from .period import default_range, make_period, settings_period, summary_period
 from .settings import (TIMEZONES, VERSION, app_directory, data_directory, is_configured, load_settings,
@@ -46,6 +47,7 @@ KEEP_DOWNLOADS = 3
 RECENT_RUNS = 8
 STEPS = [("download", "Get referrals"), ("render", "Make dashboards"), ("summaries", "District summaries")]
 UPLOAD_STEP = ("upload", "Upload to Drive")
+VIDEO_STEPS = [("download", "Get referrals"), ("video", "Make the trend video")]
 
 
 def default_output_folder():
@@ -84,7 +86,8 @@ class Controller:
             "version": VERSION, "timezones": TIMEZONES, "settings": settings,
             "configured": is_configured(settings), "suggested_timezone": suggested_timezone(),
             "output_folder": output,
-            "run": run, "recent": self.recent(output),
+            "run": run, "recent": self.recent(output), "mode": settings["mode"],
+            "recent_videos": self.recent_videos(output), "video_folder": str(Path(output) / VIDEO_FOLDER),
             "plan": self.plan(settings),
             "today": default_range(settings)[1].isoformat(),
             "drive": {**drive_state, "available": drive.available(), "folder_name": settings["drive_upload_folder_name"],
@@ -102,7 +105,33 @@ class Controller:
         weekly = summary_period(period, settings)
         return {"period": period_label(period.start.isoformat(), period.end.isoformat()),
                 "summary": period_label(weekly.start.isoformat(), weekly.end.isoformat()),
-                "compared": period_label(weekly.baseline_start.isoformat(), weekly.baseline_end.isoformat())}
+                "compared": period_label(weekly.baseline_start.isoformat(), weekly.baseline_end.isoformat()),
+                "video": Controller._video_label(settings)}
+
+    @staticmethod
+    def _video_range(settings):
+        """A video covers `video_days` days of referrals, from that many days before today up to today."""
+        end = default_range(settings)[1]
+        first, _ = video_range(end, settings["video_days"])
+        return first, end
+
+    @staticmethod
+    def _video_label(settings):
+        first, last = Controller._video_range(settings)
+        return period_label(first.isoformat(), last.isoformat())
+
+    @staticmethod
+    def _video_period(settings):
+        first, last = Controller._video_range(settings)
+        return make_period({**settings, "compare_days": 7}, first.isoformat(), last.isoformat())
+
+    def recent_videos(self, output):
+        runs = []
+        for path in video_files(output)[:RECENT_RUNS]:
+            made = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+            runs.append({"folder": str(path), "name": path.stem, "generated_utc": made.isoformat(),
+                         "period": path.stem.replace("Fastest response - ", "")})
+        return runs
 
     def recent(self, output):
         runs = []
@@ -136,7 +165,7 @@ class Controller:
         current = load_settings()
         allowed = {"mission", "lightning", "pepper", "start_time", "cutoff_time", "timezones", "timezone_auto", "summary_mode", "summary_days", "summary_start", "summary_end",
                    "tableau_view_url", "lookback_days", "keep_reports", "report_mode",
-                   "report_start", "report_end", "compare_mode", "compare_days", "compare_start", "compare_end"}
+                   "report_start", "report_end", "compare_mode", "compare_days", "compare_start", "compare_end", "mode", "video_days"}
         merged = validate_settings({**current, **{k: v for k, v in body.items() if k in allowed}})
         # Refuse dates that could not run, while the person is still on the form.
         summary_period(settings_period(merged), merged)
@@ -195,7 +224,11 @@ class Controller:
         settings = load_settings()
         if source == "file" and not is_configured(settings):
             raise ValueError("Run from Tableau once so Referral Dash can find your mission, or type it under Settings > Mission.")
-        if source == "sample":
+        video = settings["mode"] == "video"
+        if video:
+            # A video's dates are the days up to today; only a Tableau run needs them for its download.
+            period = self._video_period(settings) if source == "tableau" else None
+        elif source == "sample":
             # The sample's own dates, so "Try sample data" looks the same whatever the settings say.
             period = make_period({**settings, "compare_days": 7}, *SAMPLE_RANGE)
         else:
@@ -206,7 +239,7 @@ class Controller:
             if not filename:
                 return None
         # The sample's made-up people never leave this computer.
-        uploads = source != "sample" and bool(settings["drive_upload_folder_id"])
+        uploads = source != "sample" and not video and bool(settings["drive_upload_folder_id"])
         with self.lock:
             if self.run and self.run["status"] == "running":
                 raise ValueError("A run is already in progress.")
@@ -214,7 +247,7 @@ class Controller:
                         "started": datetime.now(timezone.utc).isoformat(), "finished": None,
                         "message": "Starting...", "attention": "", "percent": 1, "error": "", "result": None,
                         "steps": [{"id": i, "label": label, "state": "pending", "detail": ""} for i, label in
-                                  STEPS + ([UPLOAD_STEP] if uploads else [])]}
+                                  (VIDEO_STEPS if video else STEPS + ([UPLOAD_STEP] if uploads else []))]}
             if source != "tableau":
                 self._step("download", "done", "Sample data" if source == "sample" else Path(filename).name)
         threading.Thread(target=self._work, args=(source, filename, settings, period), daemon=True).start()
@@ -262,6 +295,26 @@ class Controller:
             elif source == "sample":
                 filename = SAMPLE
                 settings = validate_settings({**settings, "mission": "Sample Mission"})
+            if settings["mode"] == "video":
+                current = "video"
+                self._step("video", "active")
+                base = 35 if source == "tableau" else 5
+
+                def video_progress(message, done=None, total=None):
+                    fraction = done / total if done is not None and total else None
+                    self._progress(message, base + (95 - base) * fraction if fraction is not None else None)
+                first, end = (period.start, period.end) if period else self._video_range(settings)
+                video_file, facts = make_video(filename, output, settings, end, video_progress, first=first)
+                self._step("video", "done", f"{facts['windows']} windows · {facts['areas_ranked']} areas")
+                with self.lock:
+                    self.run.update(status="done", percent=100, finished=datetime.now(timezone.utc).isoformat(),
+                                    message="Finished", result={
+                                        "kind": "video", "video": str(video_file), "folder": str(video_file.parent),
+                                        "referrals": facts["referrals"], "windows": facts["windows"],
+                                        "areas": facts["areas_ranked"],
+                                        "period": period_label(facts["first_day"], facts["last_day"]),
+                                        "compared_with": None, "drive_link": None, "drive_error": "", "removed": 0})
+                return
             current = "render"
             self._step("render", "active")
             base = 35 if source == "tableau" else 5
@@ -321,7 +374,13 @@ class Controller:
             webbrowser.open(target)
             return
         path = Path(target)
-        # Only folders: the window never needs to launch a file.
+        # Saved videos open in the player; otherwise only folders are opened.
+        if path.is_file() and path.suffix == ".mp4" and path.parent.name == VIDEO_FOLDER:
+            if os.name == "nt":
+                os.startfile(str(path))
+            else:
+                subprocess.Popen(["open", str(path)])
+            return
         if path.is_dir():
             if os.name == "nt":
                 os.startfile(str(path))
@@ -390,6 +449,7 @@ class Handler(BaseHTTPRequestHandler):
         actions = {
             "/api/heartbeat": lambda: None,
             "/api/settings": lambda: c.save_settings(body) and None,
+            "/api/mode": lambda: c.save_settings(body) and None,
             "/api/output-folder": c.pick_output_folder,
             "/api/drive/connect": c.connect_drive,
             "/api/drive/cancel": c.cancel_drive,

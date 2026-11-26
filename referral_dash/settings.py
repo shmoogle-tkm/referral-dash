@@ -8,7 +8,7 @@ from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import available_timezones
 
-VERSION = "2.7.1"
+VERSION = "2.8.2"
 APP_NAME = "Referral Dash"
 # Older settings used these short names; they are stored as the zones they always meant.
 LEGACY_ZONES = {"UTC": "UTC", "EST": "America/New_York", "CST": "America/Chicago", "MST": "America/Denver",
@@ -42,7 +42,9 @@ DEFAULTS = {"mission": "Your Mission", "lightning": 5, "pepper": 20,
             # The Google Drive folder picked when connecting; blank means no uploads.
             "drive_upload_folder_id": "", "drive_upload_folder_name": "",
             # Follow this computer's time zone until someone picks one in Settings.
-            "timezone_auto": True}
+            "timezone_auto": True,
+            # Which the main screen makes: "report" or "video". A video covers referrals from `video_days` days ago to today.
+            "mode": "report", "video_days": 42}
 # The settings that change the numbers; a report's run-summary.json records them.
 METRIC_KEYS = ("mission", "start_time", "cutoff_time", "timezones")
 # Retired settings, dropped when an older settings file is read.
@@ -173,6 +175,11 @@ def validate_settings(data):
     result["keep_reports"] = int(result["keep_reports"])
     if not 0 <= result["keep_reports"] <= 100:
         raise ValueError("Keep between 1 and 100 report sets, or 0 to keep them all.")
+    if result["mode"] not in ("report", "video"):
+        raise ValueError("Choose Report or Video.")
+    result["video_days"] = int(result["video_days"])
+    if not 7 <= result["video_days"] <= 365:
+        raise ValueError("Videos can cover 7 to 365 days of referrals.")
     return result
 
 

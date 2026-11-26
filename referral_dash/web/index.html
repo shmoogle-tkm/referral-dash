@@ -31,6 +31,10 @@
 
       <main id="home-view" class="view">
         <section class="card run-card">
+          <nav class="mode-tabs" role="tablist" aria-label="What to make">
+            <button class="mode-tab" role="tab" data-mode="report">Report</button>
+            <button class="mode-tab" role="tab" data-mode="video">Video</button>
+          </nav>
           <p class="eyebrow" id="run-eyebrow">This week</p>
           <h1 id="run-title">Make this week's reports</h1>
           <p class="lede" id="run-lede">Opens Tableau for you to sign in, then downloads your referrals and makes every dashboard and district summary.</p>
@@ -63,7 +67,7 @@
           <div class="save-row">
             <div class="save-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h7l2 2h9v12H3V5Z"/></svg></div>
             <div class="save-copy">
-              <small>Reports are saved to</small>
+              <small id="save-label">Reports are saved to</small>
               <strong id="output-name">—</strong>
               <span id="output-path"></span>
             </div>
@@ -86,7 +90,7 @@
               <button class="button" id="drive-disconnect" hidden>Disconnect</button>
             </div>
           </div>
-          <div class="keep-row">
+          <div class="keep-row" id="keep-row">
             <label for="keep-input">Keep the newest</label>
             <input id="keep-input" type="number" min="0" max="100" step="1">
             <span id="keep-help">report sets. Older ones are deleted after each run to save space.</span>
@@ -94,7 +98,7 @@
         </section>
 
         <section class="card history">
-          <h2>Past reports</h2>
+          <h2 id="history-title">Past reports</h2>
           <div class="report-list" id="report-list"></div>
         </section>
       </main>
@@ -174,6 +178,14 @@
                 <label>Night begins<input name="cutoff_time" type="time"></label>
               </div>
               <label>Zones in another time zone<textarea name="overrides" rows="2" placeholder="Hawaii = Pacific/Honolulu (one per line)"></textarea></label>
+            </section>
+
+            <section class="setting-group">
+              <h3>Video</h3>
+              <div class="mini-fields">
+                <label>Referrals from<span class="unit-field"><input name="video_days" type="number" min="7" max="365"><span>days ago</span></span></label>
+              </div>
+              <p class="advanced-note">A video covers those referrals up to today. It is 42 days by default.</p>
             </section>
 
             <section class="setting-group">

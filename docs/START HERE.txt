@@ -6,6 +6,12 @@ referrals, and makes area, district, zone and mission dashboards plus District
 Summaries. Everything runs on this computer. It never asks for or saves your
 password, and dashboards show areas and counts, never anyone's name.
 
+VIDEOS
+At the top of the main screen, switch from Report to Video, then press Make video. The
+video follows the fastest areas' median response time over the last 42 days, one day at a
+time, and is saved to "Referral Dash videos" in your reports folder. To change how many days
+it covers, go to Settings > Advanced > Video. Switch back to Report to make the usual reports.
+
 FIRST TIME ON WINDOWS (about 2 minutes)
 1. Right-click the ZIP > Extract All. Open the new folder.
 2. Double-click "Referral Dash.exe". The app opens in its own window.

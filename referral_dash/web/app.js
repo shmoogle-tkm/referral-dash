@@ -167,7 +167,7 @@ function fillForms() {
   // Until the mission is saved, guess the time zone from this computer.
   mission.timezone.value = s.timezone_auto ? "auto" : s.timezones.default;
   const advanced = $("#advanced-form");
-  for (const key of ["lookback_days", "start_time", "cutoff_time", "lightning", "pepper", "tableau_view_url", "report_mode",
+  for (const key of ["video_days", "lookback_days", "start_time", "cutoff_time", "lightning", "pepper", "tableau_view_url", "report_mode",
                      "report_start", "report_end", "compare_mode", "compare_days", "compare_start", "compare_end", "summary_mode", "summary_days", "summary_start", "summary_end"]) advanced[key].value = s[key];
   renderDateChoices();
   advanced.overrides.value = Object.entries(overrides()).map(([zone, tz]) => `${zone} = ${tz}`).join("\n");
@@ -193,25 +193,43 @@ function renderSettings() {
 }
 
 function renderRunCard(running) {
-  const fixedDates = state.settings.report_mode === "range";
-  const last = state.recent.find((run) => run.mission === state.settings.mission);
+  const video = state.mode === "video";
+  document.documentElement.classList.toggle("video-mode", video);
+  $$(".mode-tab").forEach((tab) => {
+    const on = tab.dataset.mode === state.mode;
+    tab.classList.toggle("is-on", on);
+    tab.setAttribute("aria-selected", String(on));
+    tab.disabled = running;
+  });
+  const fixedDates = !video && state.settings.report_mode === "range";
+  const last = video ? state.recent_videos[0] : state.recent.find((run) => run.mission === state.settings.mission);
   const due = !last || Date.now() - new Date(last.generated_utc) >= 6 * DAY;
-  $("#run-eyebrow").textContent = last ? `Last run ${shortDate(last.generated_utc)} · ${daysAgo(last.generated_utc)}` : "First run";
-  $("#run-title").textContent = fixedDates ? "Make reports for these dates" : due ? "Make this week's reports" : "This week's reports are done";
+  $("#run-eyebrow").textContent = last ? `Last ${video ? "video" : "run"} ${shortDate(last.generated_utc)} · ${daysAgo(last.generated_utc)}` : video ? "First video" : "First run";
+  $("#run-title").textContent = video ? (due ? "Make this week's video" : "This week's video is done")
+    : fixedDates ? "Make reports for these dates" : due ? "Make this week's reports" : "This week's reports are done";
+  $("#run-lede").textContent = video
+    ? "Opens Tableau for you to sign in, then downloads your referrals and makes a video of the fastest areas, day by day."
+    : "Opens Tableau for you to sign in, then downloads your referrals and makes every dashboard and district summary.";
   const button = $("#run-button");
   button.disabled = running;
   const fresh = due || fixedDates;
-  button.textContent = running ? "Running…" : fresh ? "Run now" : "Run again";
+  button.textContent = running ? "Running…" : fresh ? (video ? "Make video" : "Run now") : (video ? "Make again" : "Run again");
   button.classList.toggle("is-quiet", !fresh && !running);
   const plan = $("#plan-line");
-  plan.className = "plan-line" + (state.plan.error ? " is-error" : "");
-  plan.textContent = state.plan.error ? `Check the dates in Settings > Advanced: ${state.plan.error}`
-    : state.plan.period;
+  const failed = Boolean(state.plan.error) && !video;
+  plan.className = "plan-line" + (failed ? " is-error" : "");
+  plan.textContent = failed ? `Check the dates in Settings > Advanced: ${state.plan.error}`
+    : video ? `Referrals from ${state.plan.video}` : state.plan.period;
   $$(".run-alternatives [data-run]").forEach((b) => (b.disabled = running));
 
-  $("#output-name").textContent = folderName(state.output_folder);
-  $("#output-path").textContent = state.output_folder;
-  $("#output-path").title = state.output_folder;
+  const folder = video ? state.video_folder : state.output_folder;
+  $("#save-label").textContent = video ? "Videos are saved to" : "Reports are saved to";
+  $("#output-name").textContent = folderName(folder);
+  $("#output-path").textContent = folder;
+  $("#output-path").title = folder;
+  $("#keep-row").hidden = video;
+  // Videos are not uploaded to Google Drive, so its row waits for report mode.
+  $("#drive-row").hidden = video;
   const keep = state.settings.keep_reports;
   $("#keep-help").textContent = keep ? "report sets. Older ones are deleted after each run to save space. 0 keeps them all." : "report sets. 0 keeps them all, so nothing is deleted.";
 }
@@ -273,7 +291,8 @@ function renderWork(run) {
   panel.className = `card work is-${run.status}` + (waiting ? " is-attention" : "");
   const icon = $("#work .work-icon path");
   if (icon.getAttribute("d") !== RUN_ICONS[run.status]) icon.setAttribute("d", RUN_ICONS[run.status]);
-  $("#work-title").textContent = waiting ? "Waiting for you" : { running: "Making reports", done: "Reports are ready", failed: "The run stopped" }[run.status];
+  const making = state.mode === "video" ? "video" : "reports";
+  $("#work-title").textContent = waiting ? "Waiting for you" : { running: `Making ${making}`, done: `${making === "video" ? "Video is" : "Reports are"} ready`, failed: "The run stopped" }[run.status];
   $("#work-message").textContent = run.status === "failed" ? run.error : waiting ? run.attention : run.status === "done" ? `Finished in ${elapsed(run)}` : run.message;
   $("#work-time").textContent = elapsed(run);
   $("#work-bar").style.width = `${run.status === "running" ? Math.max(run.percent, 2) : 100}%`;
@@ -285,12 +304,20 @@ function renderWork(run) {
   if (run.status === "done" && result.dataset.key !== key) {
     result.dataset.key = key;
     const r = run.result;
-    result.innerHTML = `
+    if (r.kind === "video") {
+      result.innerHTML = `
+      <div class="stat"><strong data-count="${Number(r.referrals) || 0}">0</strong><small>Referrals</small></div>
+      <div class="stat"><strong data-count="${Number(r.windows) || 0}">0</strong><small>Days shown</small></div>
+      <div class="stat"><strong data-count="${Number(r.areas) || 0}">0</strong><small>Areas ranked</small></div>
+      <div class="stat"><strong class="small">${escapeHtml(r.period)}</strong><small>Referrals from</small></div>`;
+    } else {
+      result.innerHTML = `
       <div class="stat"><strong data-count="${Number(r.referrals) || 0}">0</strong><small>Referrals</small></div>
       <div class="stat"><strong data-count="${Number(r.dashboards) || 0}">0</strong><small>Dashboards</small></div>
       <div class="stat"><strong data-count="${Number(r.summaries) || 0}">0</strong><small>District summaries</small></div>
-      <div class="stat"><strong class="small">${r.compared_with ? escapeHtml(r.compared_with) : "—"}</strong><small>${r.compared_with ? "Compared with" : "Comparison dates not in this file"}</small></div>` +
-      (r.removed ? `<p class="result-note">Removed ${r.removed} older report set${r.removed === 1 ? "" : "s"} to save space.</p>` : "") +
+      <div class="stat"><strong class="small">${r.compared_with ? escapeHtml(r.compared_with) : "—"}</strong><small>${r.compared_with ? "Compared with" : "Comparison dates not in this file"}</small></div>`;
+    }
+    result.innerHTML += (r.removed ? `<p class="result-note">Removed ${r.removed} older report set${r.removed === 1 ? "" : "s"} to save space.</p>` : "") +
       (r.drive_error ? `<p class="result-note is-error">Couldn't upload to Google Drive: ${escapeHtml(r.drive_error)} Your reports are still on this computer.</p>` : "");
     result.querySelectorAll("[data-count]").forEach(countUp);
   }
@@ -298,7 +325,10 @@ function renderWork(run) {
   actions.hidden = run.status === "running";
   if (actions.dataset.key === key) return;
   actions.dataset.key = key;
-  if (run.status === "done") {
+  if (run.status === "done" && run.result.kind === "video") {
+    actions.innerHTML = `<button class="button button-primary" data-open="${escapeHtml(run.result.video)}">Open video</button>` +
+      `<button class="button" data-open="${escapeHtml(run.result.folder)}">Show folder</button>`;
+  } else if (run.status === "done") {
     actions.innerHTML = `<button class="button button-primary" data-open="${escapeHtml(run.result.folder)}">Open reports</button>` +
       (run.result.drive_link ? `<button class="button" data-open="${escapeHtml(run.result.drive_link)}">Open in Drive</button>` : "");
   } else if (run.status === "failed") {
@@ -313,11 +343,17 @@ const FOLDER_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h7
 const ARROW_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.3 5.3 7.9 6.7l5.3 5.3-5.3 5.3 1.4 1.4 6.7-6.7-6.7-6.7Z"/></svg>';
 
 // One line per report: the dates it covers and when it was made. Click anywhere on it to open it.
+const PLAY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7L8 5Z"/></svg>';
+
+// One line per report, or per video: the dates it covers and when it was made. Click anywhere on it to open it.
 function renderReports() {
+  const video = state.mode === "video";
   const list = $("#report-list");
-  const html = !state.recent.length ? `<p class="empty-state">No reports yet.</p>` : state.recent.map((run, index) => `
+  const runs = video ? state.recent_videos : state.recent;
+  $("#history-title").textContent = video ? "Past videos" : "Past reports";
+  const html = !runs.length ? `<p class="empty-state">${video ? "No videos yet." : "No reports yet."}</p>` : runs.map((run, index) => `
     <button class="report-row" data-open="${escapeHtml(run.folder)}" title="${escapeHtml(run.folder)}">
-      <span class="report-icon">${FOLDER_ICON}</span>
+      <span class="report-icon">${video ? PLAY_ICON : FOLDER_ICON}</span>
       <span class="report-main"><strong>${escapeHtml(run.period || dateTime(run.generated_utc))}</strong>
         <span>${capital(daysAgo(run.generated_utc))}</span></span>
       ${index === 0 ? '<span class="badge">Latest</span>' : ""}
@@ -362,6 +398,7 @@ document.addEventListener("click", async (event) => {
   const target = event.target.closest("button");
   if (!target) return;
   if (target.dataset.view) showView(target.dataset.view);
+  if (target.dataset.mode) act("/api/mode", { mode: target.dataset.mode });
   if (target.dataset.open) act("/api/open", { target: target.dataset.open });
   if (target.dataset.run) {
     showView("home");
@@ -390,7 +427,7 @@ $("#drive-cancel").addEventListener("click", () => act("/api/drive/cancel", {}))
 $("#drive-disconnect").addEventListener("click", () => act("/api/drive/disconnect", {}, "Google Drive disconnected. Nothing was removed from your Drive."));
 $("#drive-open").addEventListener("click", () => act("/api/open", { target: state.drive.folder_link }));
 $("#output-change").addEventListener("click", () => act("/api/output-folder", {}));
-$("#output-open").addEventListener("click", () => act("/api/open", { target: state.output_folder }));
+$("#output-open").addEventListener("click", () => act("/api/open", { target: state.mode === "video" ? state.video_folder : state.output_folder }));
 $("#keep-input").addEventListener("change", async (event) => {
   const field = event.target;
   const typed = field.value.trim();
@@ -426,7 +463,7 @@ $("#advanced-form").addEventListener("submit", async (event) => {
                  summary_start: form.summary_start.value, summary_end: form.summary_end.value,
                  compare_start: form.compare_start.value, compare_end: form.compare_end.value,
                  lookback_days: form.lookback_days.value, start_time: form.start_time.value, cutoff_time: form.cutoff_time.value,
-                 lightning: form.lightning.value, pepper: form.pepper.value, tableau_view_url: form.tableau_view_url.value };
+                 lightning: form.lightning.value, pepper: form.pepper.value, tableau_view_url: form.tableau_view_url.value, video_days: form.video_days.value };
   if (await act("/api/settings", body, "Advanced settings saved.")) form.classList.remove("is-dirty");
 });
 

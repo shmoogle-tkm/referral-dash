@@ -2,3 +2,4 @@ pillow>=12,<13
 selenium>=4.30,<5
 keyring>=25,<26
 tzdata>=2025.1
+imageio-ffmpeg>=0.5,<1

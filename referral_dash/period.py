@@ -79,6 +79,13 @@ def make_period(settings, start=None, end=None, compare_start=None, compare_end=
                   baseline_start, baseline_end)
 
 
+def end_of_day(day, zone, now=None):
+    """The last moment of `day` in `zone`, in UTC, but never later than now."""
+    now = now or datetime.now(timezone.utc)
+    last = datetime.combine(day + timedelta(days=1), time.min, tzinfo=zone) - timedelta(seconds=1)
+    return min(last.astimezone(timezone.utc), now.astimezone(timezone.utc))
+
+
 def summary_period(period, settings):
     """What district summaries cover: the report's last `summary_days`, or a chosen range inside the
     report's dates, against the same days `compare_days` earlier (or the chosen comparison range).

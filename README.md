@@ -35,6 +35,12 @@ shows the result in one line; fixed dates stay until they are changed there.
    there as its five folders, replacing the previous copy, which goes to the Drive trash. The app asks only
    for `drive.file`, so it can see only that folder and what it made there.
 
+## Videos
+
+The **Report | Video** switch at the top of the main screen chooses what the run makes. Report makes the dashboards and district summaries as before. Video makes a trend video: a line graph of the fastest areas' median response time, one day at a time. Each day is the 7 days ending on it, the graph shows 7 days at once, and only the top 10 areas are drawn.
+
+A video covers referrals from `video_days` days ago up to today (42 by default). Change it under Settings > Advanced > Video. Videos are saved to `Referral Dash videos` in the reports folder, and Past videos lists them. Videos are not uploaded to Google Drive. **Try sample data** works in both modes.
+
 ## Google Drive setup
 
 The option appears only in builds that include `drive_oauth_client.json`, which

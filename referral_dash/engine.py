@@ -82,11 +82,8 @@ def _mission(rows, settings, as_of=None):
     return mission
 
 
-def read_export(filename, settings, period=None, baseline_covered=False):
-    """Return (mission, baseline, facts). Without a period, the whole file is the report and baseline is None.
-
-    `baseline_covered` says the file is known to include the comparison range, as a Tableau download is.
-    """
+def parse_export(filename, settings):
+    """Check a Tableau export and return (kept, skipped, raw): kept is a list of (row, day) pairs."""
     raw = Path(filename).read_bytes()
     if len(raw) > 75 * 1024 * 1024:
         raise ValueError("Export is larger than 75 MB. Check the Tableau date range and download again.")
@@ -138,6 +135,22 @@ def read_export(filename, settings, period=None, baseline_covered=False):
     if skipped > MAX_SKIPPED_SHARE * (len(kept) + skipped):
         raise ValueError(f"{skipped} of {len(kept) + skipped} rows have no area assignment or referral date. "
                          "Check the Tableau filters; this does not look like the Dashboard detail download.")
+    return kept, skipped, raw
+
+
+def measure(kept, first, last, cutoff, zone, settings):
+    """The rows dated first..last as they stood at `cutoff`, as a Mission (the same numbers every picture uses)."""
+    rows = [(rewound, day) for row, day in kept if first <= day <= last
+            for rewound in [rewind(row, cutoff, zone)] if rewound]
+    return _mission([row for row, _ in rows], settings, cutoff), rows
+
+
+def read_export(filename, settings, period=None, baseline_covered=False):
+    """Return (mission, baseline, facts). Without a period, the whole file is the report and baseline is None.
+
+    `baseline_covered` says the file is known to include the comparison range, as a Tableau download is.
+    """
+    kept, skipped, raw = parse_export(filename, settings)
     baseline = None
     if period is None:
         current = kept

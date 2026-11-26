@@ -18,7 +18,8 @@ from referral_dash.group import ReferralPerson
 from referral_dash.period import make_period
 from referral_dash.settings import DEFAULTS, app_directory, validate_settings
 
-SAMPLE = app_directory() / "sample-data" / "sample-referrals.csv"
+# Tests check exact counts, so they use a fixed copy of the original sample, not the one the app ships with.
+SAMPLE = Path(__file__).resolve().parent / "fixtures" / "sample-referrals-2.4.0.csv"
 SETTINGS = validate_settings({"mission": "Sample Mission"})
 SAMPLE_PERIOD = make_period(SETTINGS, "2026-10-01", "2026-10-08")
 
@@ -32,6 +33,10 @@ class Isolated(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         self.addCleanup(self.home.cleanup)
+        # "Try sample data" reads the same fixed copy.
+        sample_patcher = patch("referral_dash.app.SAMPLE", SAMPLE)
+        sample_patcher.start()
+        self.addCleanup(sample_patcher.stop)
 
     def rewrite_sample(self, folder, transform=lambda rows: rows, encoding="utf-8-sig", delimiter=","):
         with SAMPLE.open(encoding="utf-16", newline="") as f:
@@ -1241,3 +1246,123 @@ class AppTests(Isolated):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class VideoModeTests(unittest.TestCase):
+    """Report or Video: a video covers `video_days` days of referrals up to today, and past videos are listed."""
+
+    def setUp(self):
+        self.home = tempfile.TemporaryDirectory()
+        patcher = unittest.mock.patch.dict(os.environ, {"REFERRAL_DASH_HOME": self.home.name})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(self.home.cleanup)
+        # Referrals on every day from Oct 1 to Nov 25 in three areas, so the video has data whatever sample ships.
+        self.dense = self.dense_sample(Path(self.home.name))
+        sample_patcher = unittest.mock.patch("referral_dash.app.SAMPLE", self.dense)
+        sample_patcher.start()
+        self.addCleanup(sample_patcher.stop)
+
+    @staticmethod
+    def dense_sample(folder):
+        with SAMPLE.open(encoding="utf-16", newline="") as f:
+            header = next(csv.reader(f, delimiter="\t"))
+        areas = [("North", "North East", "North East A"), ("North", "North West", "North West A"),
+                 ("South", "South East", "South East A")]
+        rows = []
+        day = date(2026, 10, 1)
+        while day <= date(2026, 11, 25):
+            for zone, district, area in areas:
+                for hour in (9, 11, 14):
+                    received = datetime(day.year, day.month, day.day, hour)
+                    row = {name: "" for name in header}
+                    row.update({"Full Name": f"Person {len(rows)}", "Latest Zone Name": zone,
+                                "Latest District Name": district, "Latest Teaching Area Name": area,
+                                "First Referral Event Date": received.strftime("%m/%d/%Y %I:%M:%S %p"),
+                                "First Contact Attempt Event Date": (received + timedelta(minutes=25)).strftime("%m/%d/%Y %I:%M:%S %p")})
+                    rows.append(row)
+            day += timedelta(days=1)
+        path = folder / "dense-sample.csv"
+        with path.open("w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.DictWriter(f, fieldnames=header, delimiter="\t")
+            writer.writeheader()
+            writer.writerows(rows)
+        return path
+
+    def test_settings_choose_the_mode_and_the_video_length(self):
+        from referral_dash.settings import DEFAULTS, validate_settings
+        self.assertEqual((DEFAULTS["mode"], DEFAULTS["video_days"]), ("report", 42))
+        with self.assertRaisesRegex(ValueError, "Report or Video"):
+            validate_settings({"mode": "movie"})
+        with self.assertRaisesRegex(ValueError, "7 to 365"):
+            validate_settings({"video_days": 3})
+        self.assertEqual(validate_settings({"mode": "video", "video_days": "42"})["video_days"], 42)
+
+    def test_video_covers_the_days_up_to_today(self):
+        from referral_dash import video
+        first, last = video.video_range(date(2026, 11, 25), 42)
+        self.assertEqual((first, last), (date(2026, 10, 14), date(2026, 11, 25)))
+        self.assertEqual(len(video.windows(first, last)), 37)  # 43 days hold 37 seven-day windows
+
+    def test_zone_colour_comes_from_the_name(self):
+        from referral_dash import video
+        self.assertEqual(video.zone_color("North"), video.zone_color(" north "))
+        self.assertNotEqual(video.zone_color("North"), video.zone_color("South"))
+        self.assertEqual(len(video.zone_color("A zone no one has named yet")), 3)
+
+    def test_top_area_streak_counts_days_in_a_row(self):
+        from referral_dash import video
+
+        def entry(area):
+            return {"key": ("N", "D", area), "area": area, "district": "D", "zone": "N", "median": 10.0}
+        streaks = [s and (s["area"], s["streak"]) for s in video.top_streaks(
+            [[entry("A"), entry("B")], [entry("A")], [entry("B")], []])]
+        self.assertEqual(streaks, [("A", 1), ("A", 2), ("B", 1), None])
+
+    def test_video_ignores_referrals_outside_its_days(self):
+        from referral_dash import video
+        from referral_dash.engine import parse_export
+        from referral_dash.settings import validate_settings
+        sample = self.dense
+        settings = validate_settings({"mission": "Sample", "timezones": {"default": "UTC"}, "video_days": 42})
+        with tempfile.TemporaryDirectory() as folder:
+            _, facts = video.make_video(sample, folder, settings, date(2026, 11, 25))
+        kept, _, _ = parse_export(sample, settings)
+        expected = sum(date(2026, 10, 14) <= day <= date(2026, 11, 25) for _, day in kept)
+        self.assertEqual(facts["referrals"], expected)
+        self.assertEqual((facts["first_day"], facts["last_day"], facts["windows"]), ("2026-10-14", "2026-11-25", 37))
+
+    def test_saved_videos_are_listed_newest_first(self):
+        from referral_dash import video
+        folder = Path(self.home.name) / "reports" / video.VIDEO_FOLDER
+        folder.mkdir(parents=True)
+        older, newer = folder / "Fastest response - Oct 1 to Oct 30, 2026.mp4", folder / "Fastest response - Oct 14 to Nov 25, 2026.mp4"
+        for path, when in ((older, 1_700_000_000), (newer, 1_800_000_000)):
+            path.write_bytes(b"x")
+            os.utime(path, (when, when))
+        (folder / ".building_partial.mp4").write_bytes(b"x")  # unfinished: not listed
+        self.assertEqual(video.video_files(Path(self.home.name) / "reports"), [newer, older])
+
+    def test_video_mode_makes_a_video_from_the_sample(self):
+        from referral_dash import app as app_module
+        from referral_dash.settings import save_settings, validate_settings, load_settings
+        save_settings(validate_settings({**load_settings(), "mission": "Sample Mission", "mode": "video", "video_days": 42}))
+
+        class SampleToday(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 11, 25, 12, tzinfo=timezone.utc)
+        with unittest.mock.patch("referral_dash.period.datetime", SampleToday):
+            controller = app_module.Controller()
+            self.assertEqual(controller.state()["mode"], "video")
+            controller.start_run("sample")
+            deadline = time.monotonic() + 240
+            run = controller.state()["run"]
+            while run["status"] == "running" and time.monotonic() < deadline:
+                time.sleep(0.5)
+                run = controller.state()["run"]
+        self.assertEqual(run["status"], "done", run.get("error"))
+        self.assertEqual([step["id"] for step in run["steps"]], ["download", "video"])
+        self.assertEqual(run["result"]["kind"], "video")
+        self.assertEqual((run["result"]["windows"], run["result"]["period"]), (37, "Oct 14, 2026 – Nov 25, 2026"))
+        self.assertTrue(Path(run["result"]["video"]).is_file())
